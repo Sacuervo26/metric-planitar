@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import {
   CartesianGrid,
   Legend,
@@ -557,20 +558,51 @@ export default function PersonProfilePage() {
   const [selectedPeoplePods, setSelectedPeoplePods] = useState<string[]>([]);
   const [podsInitialized, setPodsInitialized] = useState(false);
   const [podsDropdownOpen, setPodsDropdownOpen] = useState(false);
-  const podsDropdownRef = useRef<HTMLDivElement | null>(null);
+  const podsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const podsPopoverRef = useRef<HTMLDivElement | null>(null);
+  const [podsDropdownPos, setPodsDropdownPos] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
+  const [portalReady, setPortalReady] = useState(false);
+
+  useEffect(() => {
+    setPortalReady(true);
+  }, []);
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
-      if (!podsDropdownRef.current) return;
-      if (!podsDropdownRef.current.contains(event.target as Node)) {
-        setPodsDropdownOpen(false);
-      }
+      const target = event.target as Node;
+      if (podsTriggerRef.current?.contains(target)) return;
+      if (podsPopoverRef.current?.contains(target)) return;
+      setPodsDropdownOpen(false);
     }
     if (podsDropdownOpen) {
       window.addEventListener("mousedown", handleOutsideClick);
     }
     return () => {
       window.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [podsDropdownOpen]);
+
+  useEffect(() => {
+    if (!podsDropdownOpen) return;
+    function updatePosition() {
+      const rect = podsTriggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPodsDropdownPos({
+        top: rect.bottom + 8,
+        left: rect.left,
+        width: rect.width,
+      });
+    }
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
     };
   }, [podsDropdownOpen]);
   const [notes] = useState<ProfileNotes>(() => {
@@ -1350,8 +1382,9 @@ export default function PersonProfilePage() {
                     )}
                   </div>
                 </div>
-                <div ref={podsDropdownRef} className="relative mt-3">
+                <div className="relative mt-3">
                   <button
+                    ref={podsTriggerRef}
                     type="button"
                     onClick={() => setPodsDropdownOpen((prev) => !prev)}
                     className={`flex w-full items-center justify-between rounded-2xl border px-4 py-2.5 text-left transition ${
@@ -1392,66 +1425,83 @@ export default function PersonProfilePage() {
                     </div>
                   </button>
 
-                  {podsDropdownOpen ? (
-                    <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl shadow-slate-200/70">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-slate-900">{t("Pods", "Pods")}</p>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedPeoplePods(availablePods)}
-                            className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
-                          >
-                            {t("Select all", "Seleccionar todo")}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSelectedPeoplePods([])}
-                            className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
-                          >
-                            {t("Clear all", "Limpiar todo")}
-                          </button>
-                        </div>
-                      </div>
-                      <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
-                        {availablePods.length === 0 ? (
-                          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
-                            {t("No pods available.", "No hay pods disponibles.")}
-                          </div>
-                        ) : (
-                          availablePods.map((pod) => {
-                            const checked = selectedPeoplePods.includes(pod);
-                            return (
-                              <label
-                                key={`people-pod-${pod}`}
-                                className={`flex cursor-pointer items-center justify-between rounded-2xl border px-3 py-2 transition ${
-                                  checked
-                                    ? "border-blue-200 bg-blue-50/70"
-                                    : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                                }`}
+                  {podsDropdownOpen && portalReady && podsDropdownPos
+                    ? createPortal(
+                        <div
+                          ref={podsPopoverRef}
+                          style={{
+                            position: "fixed",
+                            top: podsDropdownPos.top,
+                            left: podsDropdownPos.left,
+                            width: podsDropdownPos.width,
+                            zIndex: 1000,
+                          }}
+                          className="rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl shadow-slate-200/70"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-semibold text-slate-900">
+                              {t("Pods", "Pods")}
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedPeoplePods(availablePods)}
+                                className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
                               >
-                                <span className="flex min-w-0 items-center gap-3">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() =>
-                                      setSelectedPeoplePods((prev) =>
-                                        checked ? prev.filter((p) => p !== pod) : [...prev, pod]
-                                      )
-                                    }
-                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                  />
-                                  <span className="truncate text-sm font-medium text-slate-900">
-                                    {pod}
-                                  </span>
-                                </span>
-                              </label>
-                            );
-                          })
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
+                                {t("Select all", "Seleccionar todo")}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedPeoplePods([])}
+                                className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
+                              >
+                                {t("Clear all", "Limpiar todo")}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
+                            {availablePods.length === 0 ? (
+                              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                                {t("No pods available.", "No hay pods disponibles.")}
+                              </div>
+                            ) : (
+                              availablePods.map((pod) => {
+                                const checked = selectedPeoplePods.includes(pod);
+                                return (
+                                  <label
+                                    key={`people-pod-${pod}`}
+                                    className={`flex cursor-pointer items-center justify-between rounded-2xl border px-3 py-2 transition ${
+                                      checked
+                                        ? "border-blue-200 bg-blue-50/70"
+                                        : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                                    }`}
+                                  >
+                                    <span className="flex min-w-0 items-center gap-3">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() =>
+                                          setSelectedPeoplePods((prev) =>
+                                            checked
+                                              ? prev.filter((p) => p !== pod)
+                                              : [...prev, pod]
+                                          )
+                                        }
+                                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                      />
+                                      <span className="truncate text-sm font-medium text-slate-900">
+                                        {pod}
+                                      </span>
+                                    </span>
+                                  </label>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>,
+                        document.body
+                      )
+                    : null}
                 </div>
                 <div className="mt-3 max-h-[220px] overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-white/80">
                   {filteredPeople.length === 0 ? (
