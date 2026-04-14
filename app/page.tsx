@@ -1223,6 +1223,7 @@ export default function HomePage() {
                   );
                 }}
                 activeDot={{ r: 6 }}
+                isAnimationActive={false}
               />
             ))}
           </LineChart>
@@ -1514,9 +1515,9 @@ export default function HomePage() {
                       <YAxis tick={{ fontSize: 12 }} />
                       <Tooltip formatter={(value) => formatNumber(value, 1)} />
                       <Legend />
-                      <Bar dataKey="draftRate" name="Draft Rate" fill="#2563eb" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="qaRate" name="QA Rate" fill="#10b981" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="qer" name="QER %" fill="#ef4444" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="draftRate" name="Draft Rate" fill="#2563eb" radius={[8, 8, 0, 0]} isAnimationActive={false} />
+                      <Bar dataKey="qaRate" name="QA Rate" fill="#10b981" radius={[8, 8, 0, 0]} isAnimationActive={false} />
+                      <Bar dataKey="qer" name="QER %" fill="#ef4444" radius={[8, 8, 0, 0]} isAnimationActive={false} />
                     </BarChart>
                   </ResponsiveContainer>
                 </ChartCard>
@@ -1532,8 +1533,8 @@ export default function HomePage() {
                       <YAxis tick={{ fontSize: 12 }} />
                       <Tooltip formatter={(value) => formatNumber(value, 0)} />
                       <Legend />
-                      <Bar dataKey="draftFiles" name="Draft Files" fill="#4f46e5" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="qaFiles" name="QA Files" fill="#0ea5e9" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="draftFiles" name="Draft Files" fill="#4f46e5" radius={[8, 8, 0, 0]} isAnimationActive={false} />
+                      <Bar dataKey="qaFiles" name="QA Files" fill="#0ea5e9" radius={[8, 8, 0, 0]} isAnimationActive={false} />
                     </BarChart>
                   </ResponsiveContainer>
                 </ChartCard>

@@ -165,7 +165,7 @@ const QA_TARGET_MIN = 8000;
 
 const TEAM_LEADERS: Record<string, string> = {
   RRECO1: "Daniel Camilo Espejo Guzman",
-  RRECO2: "Maria Vasques",
+  RRECO2: "Maria Vasquez",
   RRECO3: "Sebastian Cuervo",
 };
 
@@ -1753,7 +1753,7 @@ export default function PersonProfilePage() {
                   <Tooltip />
                   <Legend />
                   <ReferenceLine y={QA_TARGET_MIN} stroke="#94a3b8" strokeDasharray="4 4" />
-                  <Line type="monotone" dataKey="qaRate" name="QA Rate" stroke="#10b981" strokeWidth={2.8} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="qaRate" name="QA Rate" stroke="#10b981" strokeWidth={2.8} dot={{ r: 3 }} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </article>
@@ -1773,7 +1773,7 @@ export default function PersonProfilePage() {
                   <Tooltip />
                   <Legend />
                   <ReferenceLine y={10} stroke="#94a3b8" strokeDasharray="4 4" />
-                  <Line type="monotone" dataKey="qer" name="QER %" stroke="#ef4444" strokeWidth={2.5} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="qer" name="QER %" stroke="#ef4444" strokeWidth={2.5} dot={{ r: 3 }} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </article>
@@ -1790,9 +1790,9 @@ export default function PersonProfilePage() {
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Line type="monotone" dataKey="l1" name="L1" stroke="#f59e0b" strokeWidth={2.3} dot={{ r: 2.5 }} />
-                  <Line type="monotone" dataKey="l2" name="L2" stroke="#10b981" strokeWidth={2.3} dot={{ r: 2.5 }} />
-                  <Line type="monotone" dataKey="l3" name="L3" stroke="#2563eb" strokeWidth={2.3} dot={{ r: 2.5 }} />
+                  <Line type="monotone" dataKey="l1" name="L1" stroke="#f59e0b" strokeWidth={2.3} dot={{ r: 2.5 }} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="l2" name="L2" stroke="#10b981" strokeWidth={2.3} dot={{ r: 2.5 }} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="l3" name="L3" stroke="#2563eb" strokeWidth={2.3} dot={{ r: 2.5 }} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </article>

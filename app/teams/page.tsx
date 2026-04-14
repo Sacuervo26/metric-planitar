@@ -150,7 +150,7 @@ const QA_TARGET_MIN = 8000;
 const QA_TARGET_MAX = 11000;
 const TEAM_LEADERS: Record<string, string> = {
   RRECO1: "Daniel Camilo Espejo Guzman",
-  RRECO2: "Maria Vasques",
+  RRECO2: "Maria Vasquez",
   RRECO3: "Sebastian Cuervo",
 };
 const ALL_FUNCTIONS: PersonFunction[] = ["Draft", "QA", "Siteplans", "Updates", "Revit"];
@@ -1960,8 +1960,8 @@ function TeamsPageContent() {
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Bar dataKey="draftFiles" name="Draft Files" fill="#2563eb" barSize={14} />
-                    <Bar dataKey="qaFiles" name="QA Files" fill="#10b981" barSize={14} />
+                    <Bar dataKey="draftFiles" name="Draft Files" fill="#2563eb" barSize={14} isAnimationActive={false} />
+                    <Bar dataKey="qaFiles" name="QA Files" fill="#10b981" barSize={14} isAnimationActive={false} />
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
