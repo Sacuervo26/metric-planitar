@@ -1968,199 +1968,6 @@ function TeamsPageContent() {
             </section>
           </section>
 
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-                  Alert System
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Automatic detection for long-duration files, errors, abnormal file size, multiple drafters, and out-of-range QA behavior.
-                </p>
-              </div>
-              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                {fileAlerts.length} alerts detected
-              </span>
-            </div>
-
-            <div className="mt-4 grid gap-3 2xl:grid-cols-[1fr_1fr_1fr_1fr_auto]">
-              <FilterField label="Pod">
-                <div className="relative">
-                  <select
-                    value={selectedAlertTeam}
-                    onChange={(event) => setSelectedAlertTeam(event.target.value as TeamFilter)}
-                    className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500"
-                  >
-                    <option value="all">All pods ({teamOptions.length} RRE pods)</option>
-                    {teamOptions.map((team) => (
-                      <option key={`alert-team-option-${team}`} value={team}>
-                        {team}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
-                    <ChevronDownIcon />
-                  </span>
-                </div>
-              </FilterField>
-
-              <FilterField label="Person name">
-                <input
-                  value={alertPersonFilter}
-                  onChange={(event) => setAlertPersonFilter(event.target.value)}
-                  disabled={!alertTeamFilter}
-                  list="alert-person-options"
-                  placeholder="Type a pod member name..."
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                />
-              </FilterField>
-
-              <FilterField label="Week">
-                <div className="relative">
-                  <select
-                    value={alertWeekFilter}
-                    onChange={(event) => setAlertWeekFilter(event.target.value)}
-                    disabled={!alertTeamFilter}
-                    className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                  >
-                    <option value="all">All weeks</option>
-                    {alertWeekOptions.map((option) => (
-                      <option key={`alert-week-${option.value}`} value={option.value}>
-                        {option.label} - {option.helper}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
-                    <ChevronDownIcon />
-                  </span>
-                </div>
-              </FilterField>
-
-              <FilterField label="File name">
-                <input
-                  value={focusedFile}
-                  onChange={(event) => setFocusedFile(event.target.value)}
-                  disabled={!alertTeamFilter}
-                  placeholder="Filter by file..."
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                />
-              </FilterField>
-
-              <button
-                type="button"
-                disabled={!alertTeamFilter}
-                onClick={() => {
-                  setAlertPersonFilter("");
-                  setAlertWeekFilter("all");
-                  setFocusedFile("");
-                  setSelectedAlertFileName("");
-                }}
-                className="self-end rounded-xl bg-slate-100 px-3 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                Clear filters
-              </button>
-            </div>
-
-            <datalist id="alert-person-options">
-              {alertPersonOptions.map((name) => (
-                <option key={`alert-person-suggestion-${name}`} value={name} />
-              ))}
-            </datalist>
-
-            <p className="mt-3 text-xs text-slate-500">
-              Alerts use the pod selected here and stay synced when the main pod changes.
-            </p>
-
-            {!alertTeamFilter ? (
-              <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                Select a pod in this block to enable alerts and filters.
-              </p>
-            ) : (
-              <div className="mt-4 rounded-[24px] border border-slate-200 bg-[linear-gradient(135deg,rgba(248,250,252,0.92)_0%,rgba(255,255,255,1)_100%)] p-4">
-                {alertsLoading ? (
-                  <p className="text-sm text-slate-500">Loading alerts...</p>
-                ) : filteredFileAlerts.length === 0 ? (
-                  <p className="text-sm text-slate-500">No alerts were found for the current filter.</p>
-                ) : (
-                  <div className="max-h-[420px] overflow-auto pr-1">
-                    <div className="space-y-3">
-                      {filteredFileAlerts.map((alert) => {
-                        const active = selectedAlertFileName === alert.fileName;
-                        return (
-                          <article
-                            key={alert.id}
-                            onClick={() => setSelectedAlertFileName(alert.fileName)}
-                            className={`cursor-pointer rounded-2xl border bg-white p-4 shadow-sm transition ${
-                              active
-                                ? "border-blue-300 bg-blue-50/30 ring-2 ring-blue-100"
-                                : "border-slate-200 hover:border-slate-300 hover:bg-slate-50/60"
-                            }`}
-                          >
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap gap-2 text-xs">
-                                  <span
-                                    className={`rounded-full border px-3 py-1 font-semibold uppercase ${getIssueStyle(
-                                      alert.severity
-                                    )}`}
-                                  >
-                                    {alert.severity}
-                                  </span>
-                                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
-                                    {alert.weekLabel}
-                                  </span>
-                                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
-                                    {alert.firstDay} - {alert.lastDay}
-                                  </span>
-                                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
-                                    {alert.team}
-                                  </span>
-                                </div>
-
-                                {isUrl(alert.fileName) ? (
-                                  <a
-                                    href={alert.fileName}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    onClick={(event) => event.stopPropagation()}
-                                    className="mt-3 block break-all text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 transition hover:text-blue-700 hover:decoration-blue-400"
-                                  >
-                                    {alert.fileName}
-                                  </a>
-                                ) : (
-                                  <p className="mt-3 break-all text-sm font-semibold text-slate-900">
-                                    {alert.fileName}
-                                  </p>
-                                )}
-
-                                <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-                                  <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
-                                    Drafter: {alert.drafter}
-                                  </span>
-                                  <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
-                                    QA: {alert.qa}
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div className="min-w-[220px] rounded-2xl bg-slate-50 px-4 py-3">
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                                  Issue
-                                </p>
-                                <p className="mt-1 text-sm font-semibold text-slate-900">{alert.issue}</p>
-                                <p className="mt-2 text-sm text-slate-600">{alert.value}</p>
-                              </div>
-                            </div>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
           <details open className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-2">
               <div>
@@ -2721,6 +2528,199 @@ function TeamsPageContent() {
               </div>
             </section>
           )}
+
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
+                  Alert System
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Automatic detection for long-duration files, errors, abnormal file size, multiple drafters, and out-of-range QA behavior.
+                </p>
+              </div>
+              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                {fileAlerts.length} alerts detected
+              </span>
+            </div>
+
+            <div className="mt-4 grid gap-3 2xl:grid-cols-[1fr_1fr_1fr_1fr_auto]">
+              <FilterField label="Pod">
+                <div className="relative">
+                  <select
+                    value={selectedAlertTeam}
+                    onChange={(event) => setSelectedAlertTeam(event.target.value as TeamFilter)}
+                    className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500"
+                  >
+                    <option value="all">All pods ({teamOptions.length} RRE pods)</option>
+                    {teamOptions.map((team) => (
+                      <option key={`alert-team-option-${team}`} value={team}>
+                        {team}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
+                    <ChevronDownIcon />
+                  </span>
+                </div>
+              </FilterField>
+
+              <FilterField label="Person name">
+                <input
+                  value={alertPersonFilter}
+                  onChange={(event) => setAlertPersonFilter(event.target.value)}
+                  disabled={!alertTeamFilter}
+                  list="alert-person-options"
+                  placeholder="Type a pod member name..."
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                />
+              </FilterField>
+
+              <FilterField label="Week">
+                <div className="relative">
+                  <select
+                    value={alertWeekFilter}
+                    onChange={(event) => setAlertWeekFilter(event.target.value)}
+                    disabled={!alertTeamFilter}
+                    className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    <option value="all">All weeks</option>
+                    {alertWeekOptions.map((option) => (
+                      <option key={`alert-week-${option.value}`} value={option.value}>
+                        {option.label} - {option.helper}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
+                    <ChevronDownIcon />
+                  </span>
+                </div>
+              </FilterField>
+
+              <FilterField label="File name">
+                <input
+                  value={focusedFile}
+                  onChange={(event) => setFocusedFile(event.target.value)}
+                  disabled={!alertTeamFilter}
+                  placeholder="Filter by file..."
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                />
+              </FilterField>
+
+              <button
+                type="button"
+                disabled={!alertTeamFilter}
+                onClick={() => {
+                  setAlertPersonFilter("");
+                  setAlertWeekFilter("all");
+                  setFocusedFile("");
+                  setSelectedAlertFileName("");
+                }}
+                className="self-end rounded-xl bg-slate-100 px-3 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                Clear filters
+              </button>
+            </div>
+
+            <datalist id="alert-person-options">
+              {alertPersonOptions.map((name) => (
+                <option key={`alert-person-suggestion-${name}`} value={name} />
+              ))}
+            </datalist>
+
+            <p className="mt-3 text-xs text-slate-500">
+              Alerts use the pod selected here and stay synced when the main pod changes.
+            </p>
+
+            {!alertTeamFilter ? (
+              <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                Select a pod in this block to enable alerts and filters.
+              </p>
+            ) : (
+              <div className="mt-4 rounded-[24px] border border-slate-200 bg-[linear-gradient(135deg,rgba(248,250,252,0.92)_0%,rgba(255,255,255,1)_100%)] p-4">
+                {alertsLoading ? (
+                  <p className="text-sm text-slate-500">Loading alerts...</p>
+                ) : filteredFileAlerts.length === 0 ? (
+                  <p className="text-sm text-slate-500">No alerts were found for the current filter.</p>
+                ) : (
+                  <div className="max-h-[420px] overflow-auto pr-1">
+                    <div className="space-y-3">
+                      {filteredFileAlerts.map((alert) => {
+                        const active = selectedAlertFileName === alert.fileName;
+                        return (
+                          <article
+                            key={alert.id}
+                            onClick={() => setSelectedAlertFileName(alert.fileName)}
+                            className={`cursor-pointer rounded-2xl border bg-white p-4 shadow-sm transition ${
+                              active
+                                ? "border-blue-300 bg-blue-50/30 ring-2 ring-blue-100"
+                                : "border-slate-200 hover:border-slate-300 hover:bg-slate-50/60"
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap gap-2 text-xs">
+                                  <span
+                                    className={`rounded-full border px-3 py-1 font-semibold uppercase ${getIssueStyle(
+                                      alert.severity
+                                    )}`}
+                                  >
+                                    {alert.severity}
+                                  </span>
+                                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                    {alert.weekLabel}
+                                  </span>
+                                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                    {alert.firstDay} - {alert.lastDay}
+                                  </span>
+                                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                    {alert.team}
+                                  </span>
+                                </div>
+
+                                {isUrl(alert.fileName) ? (
+                                  <a
+                                    href={alert.fileName}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="mt-3 block break-all text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 transition hover:text-blue-700 hover:decoration-blue-400"
+                                  >
+                                    {alert.fileName}
+                                  </a>
+                                ) : (
+                                  <p className="mt-3 break-all text-sm font-semibold text-slate-900">
+                                    {alert.fileName}
+                                  </p>
+                                )}
+
+                                <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                                  <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
+                                    Drafter: {alert.drafter}
+                                  </span>
+                                  <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
+                                    QA: {alert.qa}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="min-w-[220px] rounded-2xl bg-slate-50 px-4 py-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                  Issue
+                                </p>
+                                <p className="mt-1 text-sm font-semibold text-slate-900">{alert.issue}</p>
+                                <p className="mt-2 text-sm text-slate-600">{alert.value}</p>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
 
           {functionsEditorRow && (
             <div
