@@ -16,6 +16,12 @@ export type PersistedUploadBatches = {
   updatedAt: string;
 };
 
+export const EMPTY_PERSISTED_UPLOAD_BATCHES: PersistedUploadBatches = {
+  standard: [],
+  australia: [],
+  updatedAt: "",
+};
+
 const STANDARD_BATCHES_KEY = "metric-planitar-standard-batches";
 const AUSTRALIA_BATCHES_KEY = "metric-planitar-australia-batches";
 const UPLOAD_BATCHES_DB_NAME = "metric-planitar-upload-db";
@@ -71,7 +77,7 @@ function safeReadLocalStorage<T>(key: string, fallback: T): T {
 
 export async function readPersistedUploadBatches(): Promise<PersistedUploadBatches> {
   if (typeof window === "undefined") {
-    return { standard: [], australia: [], updatedAt: "" };
+    return EMPTY_PERSISTED_UPLOAD_BATCHES;
   }
 
   try {
@@ -88,3 +94,32 @@ export async function readPersistedUploadBatches(): Promise<PersistedUploadBatch
   };
 }
 
+export async function writePersistedUploadBatches(
+  payload: PersistedUploadBatches
+): Promise<void> {
+  if (typeof window === "undefined") return;
+
+  try {
+    const db = await openUploadBatchesDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(UPLOAD_BATCHES_STORE, "readwrite");
+      const store = tx.objectStore(UPLOAD_BATCHES_STORE);
+      store.put(payload, UPLOAD_BATCHES_RECORD_KEY);
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("Error writing upload batches"));
+      tx.onabort = () => reject(tx.error ?? new Error("Upload batch transaction aborted"));
+    });
+    db.close();
+    return;
+  } catch {}
+
+  try {
+    localStorage.setItem(STANDARD_BATCHES_KEY, JSON.stringify(payload.standard));
+    localStorage.setItem(AUSTRALIA_BATCHES_KEY, JSON.stringify(payload.australia));
+  } catch {}
+}
+
+export async function clearPersistedUploadBatches(): Promise<void> {
+  await writePersistedUploadBatches(EMPTY_PERSISTED_UPLOAD_BATCHES);
+}

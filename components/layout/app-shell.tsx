@@ -3,7 +3,17 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { readPersistedUploadBatches } from "@/lib/store/upload-batches";
+import { AppLanguageProvider, useAppLanguage } from "@/lib/i18n/app-language";
+import {
+  readPersistedUploadBatches,
+  writePersistedUploadBatches,
+} from "@/lib/store/upload-batches";
+import {
+  DASHBOARD_SNAPSHOT_EVENT,
+  DASHBOARD_SNAPSHOT_KEY,
+  type DashboardSnapshot,
+} from "@/lib/store/dashboard-snapshot";
+import { fetchRemoteDashboardState } from "@/lib/store/remote-dashboard-state";
 import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
 
 type NavItem = {
@@ -162,16 +172,18 @@ function SidebarItem({
   );
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+function AppShellInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const snapshot = useDashboardSnapshot();
+  const { language, setLanguage } = useAppLanguage();
   const [collapsed, setCollapsed] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [query, setQuery] = useState("");
   const [focusSearch, setFocusSearch] = useState(false);
   const [indexedFiles, setIndexedFiles] = useState<Array<{ file: string; team: string }>>([]);
   const [hasLoadedFileIndex, setHasLoadedFileIndex] = useState(false);
+  const [hasAttemptedCloudBootstrap, setHasAttemptedCloudBootstrap] = useState(false);
 
   useEffect(() => {
     setHydrated(true);
@@ -187,6 +199,68 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
     } catch {}
   }, [collapsed, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated || hasAttemptedCloudBootstrap) return;
+
+    let cancelled = false;
+
+    async function bootstrapCloudState() {
+      try {
+        const remote = await fetchRemoteDashboardState();
+        if (cancelled || !remote.configured || !remote.state) return;
+
+        let localSnapshotGeneratedAt = 0;
+        try {
+          const rawLocalSnapshot = localStorage.getItem(DASHBOARD_SNAPSHOT_KEY);
+          if (rawLocalSnapshot) {
+            const parsed = JSON.parse(rawLocalSnapshot) as DashboardSnapshot;
+            localSnapshotGeneratedAt = Date.parse(parsed.generatedAt ?? "") || 0;
+          }
+        } catch {}
+
+        const localBatches = await readPersistedUploadBatches();
+        const localUpdatedAt = Math.max(
+          Date.parse(localBatches.updatedAt ?? "") || 0,
+          localSnapshotGeneratedAt
+        );
+        const remoteUpdatedAt = Math.max(
+          Date.parse(remote.state.updatedAt ?? "") || 0,
+          Date.parse(remote.state.snapshot?.generatedAt ?? "") || 0
+        );
+
+        const shouldHydrate =
+          localUpdatedAt === 0 ||
+          (remoteUpdatedAt > 0 && remoteUpdatedAt > localUpdatedAt);
+
+        if (!shouldHydrate) return;
+
+        await writePersistedUploadBatches(remote.state.batches);
+
+        if (remote.state.snapshot) {
+          localStorage.setItem(
+            DASHBOARD_SNAPSHOT_KEY,
+            JSON.stringify(remote.state.snapshot)
+          );
+        } else {
+          localStorage.removeItem(DASHBOARD_SNAPSHOT_KEY);
+        }
+
+        window.dispatchEvent(new Event(DASHBOARD_SNAPSHOT_EVENT));
+      } catch {
+      } finally {
+        if (!cancelled) {
+          setHasAttemptedCloudBootstrap(true);
+        }
+      }
+    }
+
+    void bootstrapCloudState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasAttemptedCloudBootstrap, hydrated]);
 
   const shellCols = useMemo(
     () => (collapsed ? "lg:grid-cols-[88px_1fr]" : "lg:grid-cols-[248px_1fr]"),
@@ -286,7 +360,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       hits.push({
         type: "person",
         label: person,
-        sublabel: "Persona",
+        sublabel: language === "es" ? "Persona" : "Person",
         href: `/profile/${encodeURIComponent(person)}`,
         exactKey: normalized,
         score,
@@ -317,7 +391,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       hits.push({
         type: "file",
         label: file.file,
-        sublabel: file.team ? `Archivo • ${file.team}` : "Archivo",
+        sublabel: file.team
+          ? `${language === "es" ? "Archivo" : "File"} - ${file.team}`
+          : language === "es"
+            ? "Archivo"
+            : "File",
         href,
         exactKey: normalized,
         score,
@@ -327,7 +405,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return hits
       .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
       .slice(0, 8);
-  }, [indexedFiles, people, query, teams]);
+  }, [indexedFiles, language, people, query, teams]);
 
   function openHit(hit: SearchHit) {
     router.push(hit.href);
@@ -347,7 +425,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className={`min-h-screen lg:grid ${shellCols} transition-all duration-300`}>
       <aside
-        className={`hidden border-r border-slate-200/80 bg-[#f8fbff] px-3 py-6 lg:block ${
+        className={`sticky top-0 hidden h-screen self-start overflow-y-auto border-r border-slate-200/80 bg-[#f8fbff] px-3 py-6 lg:block ${
           collapsed ? "w-[88px]" : "w-[248px]"
         } transition-all duration-300`}
       >
@@ -355,7 +433,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {!collapsed && (
             <div>
               <h1 className="font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-900">
-                Metric Planitar
+                Metrics Planitar
               </h1>
               <p className="mt-1 text-sm text-slate-500">Ops Intelligence</p>
             </div>
@@ -365,8 +443,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             type="button"
             onClick={() => setCollapsed((prev) => !prev)}
             className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
-            title={collapsed ? "Expandir sidebar" : "Colapsar sidebar"}
-            aria-label={collapsed ? "Expandir sidebar" : "Colapsar sidebar"}
+            title={language === "es" ? (collapsed ? "Expandir barra lateral" : "Colapsar barra lateral") : (collapsed ? "Expand sidebar" : "Collapse sidebar")}
+            aria-label={language === "es" ? (collapsed ? "Expandir barra lateral" : "Colapsar barra lateral") : (collapsed ? "Expand sidebar" : "Collapse sidebar")}
           >
             <CollapseIcon collapsed={collapsed} />
           </button>
@@ -411,7 +489,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <p className="text-xs uppercase tracking-wider text-blue-500">Data Center</p>
               <p className="mt-2 text-sm font-semibold text-slate-900">Admin Upload</p>
               <p className="mt-1 text-xs text-slate-600">
-                Cargar Standard y Australia para actualizar analytics.
+                {language === "es"
+                  ? "Carga Standard y Australia para actualizar analytics."
+                  : "Upload Standard and Australia files to refresh analytics."}
               </p>
               <Link
                 href="/upload"
@@ -422,7 +502,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 }`}
               >
                 {UploadIcon("h-3.5 w-3.5")}
-                Abrir Upload
+                {language === "es" ? "Abrir Upload" : "Open Upload"}
               </Link>
             </>
           ) : (
@@ -442,112 +522,188 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <main className="min-w-0">
-        <header className="sticky top-0 z-40 border-b border-slate-200/70 bg-white/90 backdrop-blur-md">
-          <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
-                Operational Dashboard
-              </p>
-              <p className="font-[var(--font-space-grotesk)] text-lg font-semibold text-slate-900">
-                Metric Planitar
-              </p>
-            </div>
+        <header className="sticky top-0 z-40 px-4 pt-3 sm:px-6">
+          <div className="relative mx-auto max-w-[1500px] overflow-visible border border-amber-200/70 bg-[linear-gradient(96deg,rgba(252,209,22,0.96)_0%,rgba(255,244,188,0.95)_22%,rgba(0,56,147,0.78)_62%,rgba(206,17,38,0.76)_100%)] shadow-[0_20px_50px_-34px_rgba(15,23,42,0.42)] backdrop-blur-xl">
+            <div className="h-1.5 bg-[linear-gradient(90deg,#FCD116_0%,#FCD116_50%,#003893_50%,#003893_75%,#CE1126_75%,#CE1126_100%)]" />
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_20%,rgba(255,255,255,0.42),transparent_26%),radial-gradient(circle_at_64%_18%,rgba(255,255,255,0.18),transparent_20%),linear-gradient(180deg,rgba(255,255,255,0.12),rgba(255,255,255,0.02))]"
+            />
+            <div className="relative z-10 mx-auto flex max-w-[1500px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                  Operational Dashboard
+                </p>
+                <p className="font-[var(--font-space-grotesk)] text-lg font-semibold text-slate-950">
+                  Metrics Planitar
+                </p>
+              </div>
 
-            <div className="relative hidden w-full max-w-[680px] lg:block">
-              <form onSubmit={onSearchSubmit} className="relative">
-                <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
-                  <SearchIcon />
-                </span>
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  onFocus={() => setFocusSearch(true)}
-                  onBlur={() => {
-                    window.setTimeout(() => setFocusSearch(false), 140);
-                  }}
-                  placeholder="Buscar persona, team o archivo..."
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-9 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white"
-                />
-              </form>
+              <div className="relative hidden w-full max-w-[680px] lg:block">
+                <form onSubmit={onSearchSubmit} className="relative">
+                  <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
+                    <SearchIcon />
+                  </span>
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    onFocus={() => setFocusSearch(true)}
+                    onBlur={() => {
+                      window.setTimeout(() => setFocusSearch(false), 140);
+                    }}
+                    placeholder={language === "es" ? "Buscar persona, team o archivo..." : "Search person, team, or file..."}
+                    className="w-full rounded-2xl border border-slate-200 bg-white/92 px-9 py-3 text-sm text-slate-700 outline-none shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] transition focus:border-blue-400 focus:bg-white focus:shadow-[0_0_0_4px_rgba(59,130,246,0.12)]"
+                  />
+                </form>
 
-              {showSearchPanel && (
-                <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-50 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-                  {searchHits.length > 0 ? (
-                    searchHits.map((hit) => (
-                      <button
-                        key={`${hit.type}-${hit.exactKey}-${hit.href}`}
-                        type="button"
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => openHit(hit)}
-                        className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left transition hover:bg-slate-50"
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium text-slate-900">
-                            {hit.label}
+                {showSearchPanel && (
+                  <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-50 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    {searchHits.length > 0 ? (
+                      searchHits.map((hit) => (
+                        <button
+                          key={`${hit.type}-${hit.exactKey}-${hit.href}`}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => openHit(hit)}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left transition hover:bg-slate-50"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-medium text-slate-900">
+                              {hit.label}
+                            </span>
+                            <span className="block text-xs text-slate-500">{hit.sublabel}</span>
                           </span>
-                          <span className="block text-xs text-slate-500">{hit.sublabel}</span>
-                        </span>
-                        <span className="ml-3 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                          {hit.type}
-                        </span>
-                      </button>
-                    ))
-                  ) : (
-                    <div className="rounded-xl px-3 py-2 text-sm text-slate-500">
-                      Sin resultados para esa búsqueda.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+                          <span className="ml-3 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                            {hit.type}
+                          </span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="rounded-xl px-3 py-2 text-sm text-slate-500">
+                        {language === "es"
+                          ? "Sin resultados para esa busqueda."
+                          : "No results for that search."}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
 
-            <div className="hidden items-center gap-2 lg:flex">
-              <Link
-                href="/upload"
-                className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                  pathname.startsWith("/upload")
-                    ? "bg-blue-600 text-white"
-                    : "bg-slate-900 text-white hover:bg-slate-800"
-                }`}
-              >
-                {UploadIcon("h-3.5 w-3.5")}
-                Data Center
-              </Link>
-            </div>
-
-            <nav className="flex flex-wrap items-center gap-2 lg:hidden">
-              {navItems.map((item) => {
-                const active = item.match(pathname);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                      active
-                        ? "bg-blue-100 text-blue-700"
-                        : "bg-slate-100 text-slate-700"
+              <div className="hidden items-center gap-2 lg:flex">
+                <div className="inline-flex rounded-2xl border border-slate-200 bg-slate-50/85 p-1 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setLanguage("en")}
+                    className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                      language === "en"
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
-                    {item.label}
-                  </Link>
-                );
-              })}
-              <Link
-                href="/upload"
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                  pathname.startsWith("/upload")
-                    ? "bg-blue-100 text-blue-700"
-                    : "bg-slate-100 text-slate-700"
-                }`}
-              >
-                Data Center
-              </Link>
-            </nav>
+                    EN
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLanguage("es")}
+                    className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                      language === "es"
+                        ? "bg-slate-900 text-white shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    ES
+                  </button>
+                </div>
+                <Link
+                  href="/upload"
+                  className={`inline-flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-xs font-semibold transition ${
+                    pathname.startsWith("/upload")
+                      ? "border-blue-700 bg-blue-700 text-white shadow-sm"
+                      : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
+                  }`}
+                >
+                  {UploadIcon("h-3.5 w-3.5")}
+                  Data Center
+                </Link>
+              </div>
+
+              <nav className="flex flex-wrap items-center gap-2 lg:hidden">
+                {navItems.map((item) => {
+                  const active = item.match(pathname);
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                        active
+                          ? "bg-blue-100 text-blue-700"
+                          : "bg-slate-100 text-slate-700"
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+                <Link
+                  href="/upload"
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                    pathname.startsWith("/upload")
+                      ? "bg-blue-100 text-blue-700"
+                      : "bg-slate-100 text-slate-700"
+                  }`}
+                >
+                  Data Center
+                </Link>
+                <div className="inline-flex rounded-lg border border-slate-200 bg-white/80 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setLanguage("en")}
+                    className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                      language === "en" ? "bg-slate-900 text-white" : "text-slate-600"
+                    }`}
+                  >
+                    EN
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLanguage("es")}
+                    className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                      language === "es" ? "bg-slate-900 text-white" : "text-slate-600"
+                    }`}
+                  >
+                    ES
+                  </button>
+                </div>
+              </nav>
+            </div>
           </div>
         </header>
 
-        <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 sm:py-8">{children}</div>
+        <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 sm:py-8">
+          {children}
+        </div>
+        <footer className="border-t border-slate-200/80 bg-white/80">
+          <div className="mx-auto max-w-[1500px] px-4 py-4 text-center text-xs text-slate-500 sm:px-6">
+            {language === "es" ? "Disenado y desarrollado por " : "Designed and developed by "}
+            <a
+              href="https://sebweb.com"
+              target="_blank"
+              rel="noreferrer"
+              className="font-semibold text-slate-700 transition hover:text-blue-700"
+            >
+              sebweb.com
+            </a>
+          </div>
+        </footer>
       </main>
     </div>
+  );
+}
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+  return (
+    <AppLanguageProvider>
+      <AppShellInner>{children}</AppShellInner>
+    </AppLanguageProvider>
   );
 }

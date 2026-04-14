@@ -14,9 +14,27 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { parseNumber } from "@/lib/format/number";
+import {
+  getField,
+  getStrictFieldByAliases,
+  looksLikeDateOrTimestamp,
+  normalizeValue,
+} from "@/lib/csv/row-helpers";
+import {
+  COL_DRAFTER_NAME,
+  COL_DRAFTER_TEAM,
+  COL_QA_NAME,
+  COL_QA_TEAM,
+} from "@/lib/presets/constants";
+import { matchesPreset } from "@/lib/presets/matches-preset";
+import type { CsvRow, PresetMode } from "@/lib/metrics/types";
 import type { TeamMemberSnapshotRow } from "@/lib/store/dashboard-snapshot";
+import { useAppLanguage } from "@/lib/i18n/app-language";
+import { readPersistedUploadBatches } from "@/lib/store/upload-batches";
 import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
 import { InfoTooltip } from "@/components/shared/info-tooltip";
+import { getCountryMetaFromTeam } from "@/lib/profile/country-theme";
 
 type Level = "Junior" | "Intermedio" | "Senior";
 type PrimaryRole = "Drafter" | "QA";
@@ -62,6 +80,34 @@ type ChartRow = {
   qaHours: number;
 };
 
+type DraftTrendComparisonFieldKey =
+  | "combinedDraftRate"
+  | "stdDraftRate"
+  | "premiumDraftRate"
+  | "adsStdDraftRate"
+  | "adsPremDraftRate"
+  | "gt10kDraftRate";
+
+type DraftTrendComparisonRow = {
+  week: string;
+} & Record<DraftTrendComparisonFieldKey, number | null>;
+
+type ProfileAlertRow = {
+  id: string;
+  fileName: string;
+  team: string;
+  weekKey: string;
+  weekLabel: string;
+  firstDay: string;
+  lastDay: string;
+  drafter: string;
+  qa: string;
+  people: string[];
+  issue: string;
+  value: string;
+  severity: "high" | "medium";
+};
+
 type ProfileNotes = {
   about: string;
   strengths: string;
@@ -86,6 +132,29 @@ const PRESET_OPTIONS = [
 ] as const;
 type PersonPresetMode = (typeof PRESET_OPTIONS)[number]["key"];
 
+const DRAFT_RATE_FIELD_BY_PRESET: Record<PersonPresetMode, DraftTrendComparisonFieldKey> = {
+  combined: "combinedDraftRate",
+  std: "stdDraftRate",
+  premium: "premiumDraftRate",
+  ads_std: "adsStdDraftRate",
+  ads_prem: "adsPremDraftRate",
+  gt10k: "gt10kDraftRate",
+};
+
+const DRAFT_TREND_SERIES: ReadonlyArray<{
+  preset: PersonPresetMode;
+  label: string;
+  dataKey: DraftTrendComparisonFieldKey;
+  color: string;
+}> = [
+  { preset: "combined", label: "Combined", dataKey: "combinedDraftRate", color: "#2563eb" },
+  { preset: "std", label: "Std", dataKey: "stdDraftRate", color: "#0f766e" },
+  { preset: "premium", label: "Premium", dataKey: "premiumDraftRate", color: "#d97706" },
+  { preset: "ads_std", label: "ADS Std", dataKey: "adsStdDraftRate", color: "#0891b2" },
+  { preset: "ads_prem", label: "ADS Prem", dataKey: "adsPremDraftRate", color: "#dc2626" },
+  { preset: "gt10k", label: ">10k", dataKey: "gt10kDraftRate", color: "#7c3aed" },
+];
+
 const LEVEL_TARGETS: Record<Level, number> = {
   Junior: 2500,
   Intermedio: 3500,
@@ -109,6 +178,10 @@ function normalizeName(value: string) {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function formatLevelLabel(level: string) {
+  return level === "Intermedio" ? "Intermediate" : level;
 }
 
 function toSafeNumber(value: unknown) {
@@ -198,12 +271,12 @@ function ChevronDownIcon({ className = "h-4 w-4" }: { className?: string }) {
 
 function defaultProfileNotes(name: string): ProfileNotes {
   return {
-    about: `${name} mantiene enfoque en productividad, calidad y control operativo semanal.`,
-    strengths: "Disciplina operativa, cumplimiento de tiempos, seguimiento de calidad.",
-    focusAreas: "Reducir variabilidad semanal, optimizar QER y mantener consistencia.",
-    recentNotes: "Sin notas recientes registradas.",
-    achievements: "Sin highlights cargados.",
-    shiftLeaderNotes: "Sin feedback registrado por Shift Leader.",
+    about: `${name} maintains a steady focus on productivity, quality, and weekly operational control.`,
+    strengths: "Operational discipline, deadline consistency, and quality follow-through.",
+    focusAreas: "Reduce weekly variability, optimize QER, and keep performance consistent.",
+    recentNotes: "No recent notes recorded.",
+    achievements: "No highlights loaded yet.",
+    shiftLeaderNotes: "No Shift Leader feedback recorded.",
   };
 }
 
@@ -276,7 +349,7 @@ function TrendDelta({
   decimals?: number;
   invert?: boolean;
 }) {
-  if (previous === null) return <span className="text-xs text-slate-400">Sin referencia</span>;
+  if (previous === null) return <span className="text-xs text-slate-400">No reference</span>;
   const delta = current - previous;
   const improved = invert ? delta < 0 : delta > 0;
   const same = Math.abs(delta) < 0.001;
@@ -291,7 +364,169 @@ function TrendDelta({
   );
 }
 
+function getRateToneClasses(value: number, target: number) {
+  if (value >= target) return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (value >= target * 0.75) return "bg-amber-50 text-amber-700 ring-amber-200";
+  if (value > 0) return "bg-rose-50 text-rose-700 ring-rose-200";
+  return "bg-slate-100 text-slate-500 ring-slate-200";
+}
+
+function getQerToneClasses(value: number) {
+  if (value <= 10) return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (value <= 20) return "bg-amber-50 text-amber-700 ring-amber-200";
+  return "bg-rose-50 text-rose-700 ring-rose-200";
+}
+
+function getAlertToneClasses(severity: ProfileAlertRow["severity"]) {
+  if (severity === "high") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-amber-200 bg-amber-50 text-amber-700";
+}
+
+function getSortableDayTime(value: string) {
+  const parsed = parseFirstDayToTime(value);
+  return parsed === Number.MAX_SAFE_INTEGER ? -1 : parsed;
+}
+
+function parseDateCandidate(value?: string) {
+  const token = normalizeValue(value);
+  if (!token) return null;
+
+  const iso = token.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  const dmy = token.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (dmy) {
+    const date = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  const parsed = Date.parse(token.replace(",", " "));
+  if (Number.isNaN(parsed)) return null;
+  const parsedDate = new Date(parsed);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+}
+
+function getMonday(date: Date) {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  const diff = copy.getDay() === 0 ? -6 : 1 - copy.getDay();
+  copy.setDate(copy.getDate() + diff);
+  return copy;
+}
+
+function getSunday(date: Date) {
+  const monday = getMonday(date);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return sunday;
+}
+
+function formatDateLabel(date: Date) {
+  return date.toLocaleDateString("es-CO");
+}
+
+function getISOWeek(date: Date) {
+  const tmp = new Date(date.getTime());
+  tmp.setHours(0, 0, 0, 0);
+  tmp.setDate(tmp.getDate() + 3 - ((tmp.getDay() + 6) % 7));
+  const week1 = new Date(tmp.getFullYear(), 0, 4);
+  return (
+    1 +
+    Math.round(
+      ((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7
+    )
+  );
+}
+
+function getWeekInfoFromUploadRow(row: CsvRow) {
+  const candidates: string[] = [];
+  const pushCandidate = (value?: string) => {
+    const normalized = normalizeValue(value);
+    if (normalized) candidates.push(normalized);
+  };
+
+  pushCandidate(
+    getField(row, [
+      "Publish Date",
+      "PublishDate",
+      "Date",
+      "Publish date",
+      "Completed Date",
+      "CompletedDate",
+    ])
+  );
+
+  for (const [key, value] of Object.entries(row)) {
+    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (
+      (normalizedKey.includes("publishdate") ||
+        normalizedKey === "date" ||
+        normalizedKey.includes("completeddate")) &&
+      looksLikeDateOrTimestamp(value)
+    ) {
+      pushCandidate(value);
+    }
+  }
+
+  for (const candidate of candidates) {
+    const date = parseDateCandidate(candidate);
+    if (!date) continue;
+    const monday = getMonday(date);
+    const sunday = getSunday(date);
+    return {
+      weekKey: monday.toISOString().slice(0, 10),
+      weekLabel: `Week ${getISOWeek(date)}`,
+      firstDay: formatDateLabel(monday),
+      lastDay: formatDateLabel(sunday),
+    };
+  }
+
+  return {
+    weekKey: "unassigned",
+    weekLabel: "No week",
+    firstDay: "-",
+    lastDay: "-",
+  };
+}
+
+function getTeamFromUploadRow(row: CsvRow) {
+  const draftTeam = normalizeValue(getField(row, COL_DRAFTER_TEAM)).toUpperCase();
+  if (draftTeam) return draftTeam;
+  return normalizeValue(getField(row, COL_QA_TEAM)).toUpperCase();
+}
+
+function getFileNameFromUploadRow(row: CsvRow) {
+  const strictMatch = normalizeValue(
+    getStrictFieldByAliases(row, ["File", "File Name", "Filename", "URL", "Link"])
+  );
+  if (strictMatch) return strictMatch;
+
+  const fallback = normalizeValue(
+    getField(row, ["File", "File Name", "Filename", "URL", "Link", "file", "file_name"])
+  );
+  if (fallback && !looksLikeDateOrTimestamp(fallback)) return fallback;
+
+  const rowValues = Object.values(row).map((value) => normalizeValue(value));
+  const urlCandidate = rowValues.find(
+    (value) =>
+      value.startsWith("http://") ||
+      value.startsWith("https://") ||
+      value.includes("manage.youriguide.com")
+  );
+  if (urlCandidate) return urlCandidate;
+
+  return fallback;
+}
+
+function isUrl(value: string) {
+  return /^https?:\/\//i.test(String(value ?? "").trim());
+}
+
 export default function PersonProfilePage() {
+  const { language, locale } = useAppLanguage();
   const snapshot = useDashboardSnapshot();
   const params = useParams<{ name: string | string[] }>();
   const personConfig = usePersonConfigStore();
@@ -299,11 +534,16 @@ export default function PersonProfilePage() {
   const personName = decodeURIComponent(
     Array.isArray(rawName) ? (rawName[0] ?? "") : (rawName ?? "")
   );
+  const isSpanish = language === "es";
+  const t = (en: string, es: string) => (isSpanish ? es : en);
   const normalizedPersonName = normalizeName(personName);
   const [selectedPreset, setSelectedPreset] = useState<PersonPresetMode>("combined");
   const [profileMode, setProfileMode] = useState<ProfileMode>("global");
   const [selectedWeekKey, setSelectedWeekKey] = useState<"latest" | string>("latest");
-  const [notes, setNotes] = useState<ProfileNotes>(() => {
+  const [uploadRows, setUploadRows] = useState<CsvRow[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const [selectedAlertWeekKey, setSelectedAlertWeekKey] = useState("all");
+  const [notes] = useState<ProfileNotes>(() => {
     if (typeof window === "undefined" || !personName) return defaultProfileNotes(personName);
     try {
       const raw = localStorage.getItem(PROFILE_NOTES_KEY);
@@ -323,6 +563,29 @@ export default function PersonProfilePage() {
       localStorage.setItem(PROFILE_NOTES_KEY, JSON.stringify(map));
     } catch {}
   }, [normalizedPersonName, notes, personName]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadUploadRows() {
+      setAlertsLoading(true);
+      try {
+        const batches = await readPersistedUploadBatches();
+        const rows = [
+          ...batches.standard.flatMap((batch) => batch.rows),
+          ...batches.australia.flatMap((batch) => batch.rows),
+        ];
+        if (!cancelled) setUploadRows(rows);
+      } catch {
+        if (!cancelled) setUploadRows([]);
+      } finally {
+        if (!cancelled) setAlertsLoading(false);
+      }
+    }
+    void loadUploadRows();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const config = useMemo(() => {
     const row = personConfig[personName];
@@ -354,31 +617,41 @@ export default function PersonProfilePage() {
     () => snapshot?.teamMembersWeeklyByPreset ?? {},
     [snapshot?.teamMembersWeeklyByPreset]
   );
-  const personWeeksForPreset = useMemo<WeeklyMemberRow[]>(() => {
-    const source = weeklyByPreset[selectedPreset] ?? [];
-    return source
-      .filter((row) => normalizeName(row.name) === normalizedPersonName)
-      .map((row) => ({
-        team: row.team,
-        name: row.name,
-        weekLabel: row.weekLabel,
-        firstDay: row.firstDay,
-        lastDay: row.lastDay,
-        draftFiles: toSafeNumber(row.draftFiles),
-        draftHours: toSafeNumber(row.draftHours),
-        draftRate: toSafeNumber(row.draftRate),
-        qaFiles: toSafeNumber(row.qaFiles),
-        qaHours: toSafeNumber(row.qaHours),
-        qaRate: toSafeNumber(row.qaRate),
-        qer: toSafeNumber(row.qer),
-        l1: toSafeNumber(row.l1),
-        l2: toSafeNumber(row.l2),
-        l3: toSafeNumber(row.l3),
-      }))
-      .sort(
-        (a, b) => parseFirstDayToTime(a.firstDay) - parseFirstDayToTime(b.firstDay)
-      );
-  }, [normalizedPersonName, selectedPreset, weeklyByPreset]);
+  const weeklyRowsByPreset = useMemo<Record<PersonPresetMode, WeeklyMemberRow[]>>(() => {
+    return PRESET_OPTIONS.reduce(
+      (accumulator, preset) => {
+        accumulator[preset.key] = (weeklyByPreset[preset.key] ?? [])
+          .filter((row) => normalizeName(row.name) === normalizedPersonName)
+          .map((row) => ({
+            team: row.team,
+            name: row.name,
+            weekLabel: row.weekLabel,
+            firstDay: row.firstDay,
+            lastDay: row.lastDay,
+            draftFiles: toSafeNumber(row.draftFiles),
+            draftHours: toSafeNumber(row.draftHours),
+            draftRate: toSafeNumber(row.draftRate),
+            qaFiles: toSafeNumber(row.qaFiles),
+            qaHours: toSafeNumber(row.qaHours),
+            qaRate: toSafeNumber(row.qaRate),
+            qer: toSafeNumber(row.qer),
+            l1: toSafeNumber(row.l1),
+            l2: toSafeNumber(row.l2),
+            l3: toSafeNumber(row.l3),
+          }))
+          .sort(
+            (a, b) => parseFirstDayToTime(a.firstDay) - parseFirstDayToTime(b.firstDay)
+          );
+        return accumulator;
+      },
+      {} as Record<PersonPresetMode, WeeklyMemberRow[]>
+    );
+  }, [normalizedPersonName, weeklyByPreset]);
+
+  const personWeeksForPreset = useMemo<WeeklyMemberRow[]>(
+    () => weeklyRowsByPreset[selectedPreset] ?? [],
+    [selectedPreset, weeklyRowsByPreset]
+  );
 
   const latestWeekKey = useMemo(
     () =>
@@ -420,6 +693,7 @@ export default function PersonProfilePage() {
     null;
 
   const teamLabel = combinedRow?.team ?? "-";
+  const countryMeta = getCountryMetaFromTeam(teamLabel);
   const hasAnyMetrics = personByPreset.some((item) => item.row !== null);
   const hasWeeklyMetrics = personWeeksForPreset.length > 0;
   const avatarInitials = useMemo(
@@ -481,6 +755,43 @@ export default function PersonProfilePage() {
     }));
   }, [personWeeksForPreset]);
 
+  const draftTrendComparisonRows = useMemo<DraftTrendComparisonRow[]>(() => {
+    const byWeek = new Map<
+      string,
+      { sortTime: number; row: DraftTrendComparisonRow }
+    >();
+
+    PRESET_OPTIONS.forEach((preset) => {
+      const field = DRAFT_RATE_FIELD_BY_PRESET[preset.key];
+      (weeklyRowsByPreset[preset.key] ?? []).forEach((row) => {
+        const weekKey = getWeekKey(row);
+        const existing = byWeek.get(weekKey);
+        if (existing) {
+          existing.row[field] = row.draftRate;
+          return;
+        }
+
+        byWeek.set(weekKey, {
+          sortTime: parseFirstDayToTime(row.firstDay),
+          row: {
+            week: row.weekLabel,
+            combinedDraftRate: null,
+            stdDraftRate: null,
+            premiumDraftRate: null,
+            adsStdDraftRate: null,
+            adsPremDraftRate: null,
+            gt10kDraftRate: null,
+            [field]: row.draftRate,
+          },
+        });
+      });
+    });
+
+    return Array.from(byWeek.values())
+      .sort((a, b) => a.sortTime - b.sortTime)
+      .map((entry) => entry.row);
+  }, [weeklyRowsByPreset]);
+
   const sparklineSeries = useMemo(
     () => ({
       draftRate: trendRows.map((row) => row.draftRate),
@@ -502,244 +813,399 @@ export default function PersonProfilePage() {
       : personWeeksForPreset.length > 1
         ? personWeeksForPreset[personWeeksForPreset.length - 2]
         : null;
+  const draftTarget =
+    roleLabel === "QA" ? QA_TARGET_MIN : LEVEL_TARGETS[(levelLabel as Level) ?? "Junior"] ?? 2500;
 
-  const sameTeamRows = useMemo(() => {
-    const rows = byPreset[selectedPreset] ?? [];
-    return rows.filter((row) => row.team === teamLabel);
-  }, [byPreset, selectedPreset, teamLabel]);
+  const profileAlerts = useMemo<ProfileAlertRow[]>(() => {
+    if (uploadRows.length === 0 || !teamLabel || teamLabel === "-") return [];
 
-  const teamAverage = useMemo(() => {
-    if (sameTeamRows.length === 0) {
-      return { draftRate: 0, qaRate: 0, qer: 0, hours: 0, errors: 0 };
+    type Aggregated = {
+      fileName: string;
+      team: string;
+      weekKey: string;
+      weekLabel: string;
+      firstDay: string;
+      lastDay: string;
+      drafters: Set<string>;
+      qas: Set<string>;
+      maxDraftHours: number;
+      maxQaHours: number;
+      maxSqft: number;
+      minSqft: number;
+      totalErrors: number;
+      minQaRate: number;
+      maxQaRate: number;
+    };
+
+    const byFile = new Map<string, Aggregated>();
+    for (const row of uploadRows) {
+      if (!matchesPreset(row, selectedPreset as PresetMode)) continue;
+      const rowTeam = getTeamFromUploadRow(row);
+      if (rowTeam !== teamLabel) continue;
+
+      const drafter = normalizeValue(getField(row, COL_DRAFTER_NAME));
+      const qa = normalizeValue(getField(row, COL_QA_NAME));
+      const rowPeople = [drafter, qa].filter(Boolean).map((item) => normalizeName(item));
+      if (!rowPeople.includes(normalizedPersonName)) continue;
+
+      const fileName = getFileNameFromUploadRow(row);
+      if (!fileName) continue;
+
+      const weekInfo = getWeekInfoFromUploadRow(row);
+      const aggregationKey = `${fileName}|||${weekInfo.weekKey}`;
+      if (!byFile.has(aggregationKey)) {
+        byFile.set(aggregationKey, {
+          fileName,
+          team: rowTeam,
+          weekKey: weekInfo.weekKey,
+          weekLabel: weekInfo.weekLabel,
+          firstDay: weekInfo.firstDay,
+          lastDay: weekInfo.lastDay,
+          drafters: new Set<string>(),
+          qas: new Set<string>(),
+          maxDraftHours: 0,
+          maxQaHours: 0,
+          maxSqft: 0,
+          minSqft: Number.MAX_SAFE_INTEGER,
+          totalErrors: 0,
+          minQaRate: Number.MAX_SAFE_INTEGER,
+          maxQaRate: 0,
+        });
+      }
+
+      const current = byFile.get(aggregationKey)!;
+      if (drafter) current.drafters.add(drafter);
+      if (qa) current.qas.add(qa);
+
+      const draftHours = parseNumber(
+        getField(row, ["Time (h)", "Draft Time (C)", "Draft Time", "Time"])
+      );
+      const qaHours = parseNumber(
+        getField(row, ["QA Time (D)", "QA Time", "QA Time (h)"])
+      );
+      const sqft = parseNumber(getField(row, ["Property SF (A)", "Property SF"]));
+      const l1 = parseNumber(getField(row, ["L1 Errors", "L1"]));
+      const l2 = parseNumber(getField(row, ["L2 Errors", "L2"]));
+      const l3 = parseNumber(getField(row, ["L3 Errors", "L3"]));
+      const totalErrors =
+        parseNumber(getField(row, ["Total Errors (E)", "Total Errors"])) + l1 + l2 + l3;
+      const qaRateRaw = parseNumber(getField(row, ["QA Rate (A/D)", "QA Rate"]));
+      const qaRateDerived = qaHours > 0 ? sqft / qaHours : 0;
+      const qaRate = qaRateRaw > 0 ? qaRateRaw : qaRateDerived;
+
+      current.maxDraftHours = Math.max(current.maxDraftHours, draftHours);
+      current.maxQaHours = Math.max(current.maxQaHours, qaHours);
+      current.maxSqft = Math.max(current.maxSqft, sqft);
+      current.minSqft = Math.min(current.minSqft, sqft > 0 ? sqft : current.minSqft);
+      current.totalErrors += totalErrors;
+      current.maxQaRate = Math.max(current.maxQaRate, qaRate);
+      if (qaRate > 0) current.minQaRate = Math.min(current.minQaRate, qaRate);
     }
-    const sum = sameTeamRows.reduce(
-      (acc, row) => {
-        acc.draftRate += row.draftRate;
-        acc.qaRate += row.qaRate;
-        acc.qer += row.qer;
-        acc.hours += row.draftHours + row.qaHours;
-        acc.errors += row.l1 + row.l2 + row.l3;
-        return acc;
-      },
-      { draftRate: 0, qaRate: 0, qer: 0, hours: 0, errors: 0 }
+
+    const alerts: ProfileAlertRow[] = [];
+    for (const entry of byFile.values()) {
+      const drafter = Array.from(entry.drafters).join(", ") || "-";
+      const qa = Array.from(entry.qas).join(", ") || "-";
+      const people = Array.from(new Set([...entry.drafters, ...entry.qas])).sort((a, b) =>
+        a.localeCompare(b)
+      );
+
+      if (entry.maxDraftHours > 5 || entry.maxQaHours > 5) {
+        alerts.push({
+          id: `${entry.fileName}-duration`,
+          fileName: entry.fileName,
+          team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
+          drafter,
+          qa,
+          people,
+          issue: "Duration > 5h",
+          value: `Draft ${formatNumber(entry.maxDraftHours, 2)}h / QA ${formatNumber(entry.maxQaHours, 2)}h`,
+          severity: "high",
+        });
+      }
+
+      if (entry.totalErrors >= 8) {
+        alerts.push({
+          id: `${entry.fileName}-errors`,
+          fileName: entry.fileName,
+          team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
+          drafter,
+          qa,
+          people,
+          issue: "Excessive errors",
+          value: `${formatNumber(entry.totalErrors, 0)} errors`,
+          severity: entry.totalErrors >= 14 ? "high" : "medium",
+        });
+      }
+
+      if (
+        entry.maxSqft > 15000 ||
+        (entry.minSqft !== Number.MAX_SAFE_INTEGER && entry.minSqft < 150)
+      ) {
+        alerts.push({
+          id: `${entry.fileName}-size`,
+          fileName: entry.fileName,
+          team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
+          drafter,
+          qa,
+          people,
+          issue: "Abnormal size",
+          value: `min ${formatNumber(entry.minSqft === Number.MAX_SAFE_INTEGER ? 0 : entry.minSqft, 0)} / max ${formatNumber(entry.maxSqft, 0)} sqft`,
+          severity: "medium",
+        });
+      }
+
+      if (entry.drafters.size > 1) {
+        alerts.push({
+          id: `${entry.fileName}-multi-drafter`,
+          fileName: entry.fileName,
+          team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
+          drafter,
+          qa,
+          people,
+          issue: "Multiple drafters",
+          value: `${entry.drafters.size} drafters`,
+          severity: "high",
+        });
+      }
+
+      if (
+        (entry.minQaRate !== Number.MAX_SAFE_INTEGER && entry.minQaRate < QA_TARGET_MIN * 0.4) ||
+        entry.maxQaRate > 11000 * 1.5
+      ) {
+        alerts.push({
+          id: `${entry.fileName}-qa-abnormal`,
+          fileName: entry.fileName,
+          team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
+          drafter,
+          qa,
+          people,
+          issue: "Abnormal QA",
+          value: `min ${formatNumber(entry.minQaRate === Number.MAX_SAFE_INTEGER ? 0 : entry.minQaRate, 0)} / max ${formatNumber(entry.maxQaRate, 0)}`,
+          severity: "high",
+        });
+      }
+    }
+
+    return alerts.sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === "high" ? -1 : 1;
+      const weekDelta = getSortableDayTime(b.firstDay) - getSortableDayTime(a.firstDay);
+      if (weekDelta !== 0) return weekDelta;
+      return a.fileName.localeCompare(b.fileName);
+    });
+  }, [normalizedPersonName, selectedPreset, teamLabel, uploadRows]);
+
+  const profileAlertWeekOptions = useMemo(() => {
+    const weeks = new Map<
+      string,
+      { value: string; label: string; helper: string; sortTime: number; count: number }
+    >();
+    for (const alert of profileAlerts) {
+      if (!weeks.has(alert.weekKey)) {
+        weeks.set(alert.weekKey, {
+          value: alert.weekKey,
+          label: alert.weekLabel,
+          helper:
+            alert.firstDay !== "-" && alert.lastDay !== "-"
+              ? `${alert.firstDay} - ${alert.lastDay}`
+              : "No range detected",
+          sortTime: getSortableDayTime(alert.firstDay),
+          count: 0,
+        });
+      }
+      weeks.get(alert.weekKey)!.count += 1;
+    }
+
+    return Array.from(weeks.values())
+      .sort((a, b) => b.sortTime - a.sortTime || a.label.localeCompare(b.label))
+    .map((item) => ({ ...item, helper: `${item.helper} · ${item.count} alerts` }));
+  }, [profileAlerts]);
+
+  const filteredProfileAlerts = useMemo(() => {
+    return profileAlerts.filter((alert) =>
+      selectedAlertWeekKey === "all" ? true : alert.weekKey === selectedAlertWeekKey
     );
-    const size = sameTeamRows.length;
-    return {
-      draftRate: sum.draftRate / size,
-      qaRate: sum.qaRate / size,
-      qer: sum.qer / size,
-      hours: sum.hours / size,
-      errors: sum.errors / size,
-    };
-  }, [sameTeamRows]);
+  }, [profileAlerts, selectedAlertWeekKey]);
 
-  const teamTop = useMemo(() => {
-    const topDraft = [...sameTeamRows].sort((a, b) => b.draftRate - a.draftRate)[0];
-    const topQa = [...sameTeamRows].sort((a, b) => b.qaRate - a.qaRate)[0];
-    const bestQer = [...sameTeamRows].sort((a, b) => a.qer - b.qer)[0];
-    const topHours = [...sameTeamRows].sort(
-      (a, b) => b.draftHours + b.qaHours - (a.draftHours + a.qaHours)
-    )[0];
-    const bestErrors = [...sameTeamRows].sort(
-      (a, b) => a.l1 + a.l2 + a.l3 - (b.l1 + b.l2 + b.l3)
-    )[0];
+  const alertSummary = useMemo(() => {
+    const highCount = filteredProfileAlerts.filter((alert) => alert.severity === "high").length;
+    const issueCount = new Set(filteredProfileAlerts.map((alert) => alert.issue)).size;
     return {
-      draftRate: topDraft?.draftRate ?? 0,
-      qaRate: topQa?.qaRate ?? 0,
-      qer: bestQer?.qer ?? 0,
-      hours: (topHours?.draftHours ?? 0) + (topHours?.qaHours ?? 0),
-      errors: (bestErrors?.l1 ?? 0) + (bestErrors?.l2 ?? 0) + (bestErrors?.l3 ?? 0),
+      total: filteredProfileAlerts.length,
+      highCount,
+      issueCount,
     };
-  }, [sameTeamRows]);
+  }, [filteredProfileAlerts]);
 
-  const benchmarkRows = useMemo(() => {
-    const personHours = toSafeNumber(activeRow?.draftHours) + toSafeNumber(activeRow?.qaHours);
-    const personErrors =
-      toSafeNumber(activeRow?.l1) + toSafeNumber(activeRow?.l2) + toSafeNumber(activeRow?.l3);
-    const draftTarget = roleLabel === "QA" ? QA_TARGET_MIN : LEVEL_TARGETS[(levelLabel as Level) ?? "Junior"] ?? 2500;
-    return [
-      {
-        label: "Draft Rate",
-        person: toSafeNumber(activeRow?.draftRate),
-        target: draftTarget,
-        teamAvg: teamAverage.draftRate,
-        top: teamTop.draftRate,
-        inverse: false,
-      },
-      {
-        label: "QA Rate",
-        person: toSafeNumber(activeRow?.qaRate),
-        target: QA_TARGET_MIN,
-        teamAvg: teamAverage.qaRate,
-        top: teamTop.qaRate,
-        inverse: false,
-      },
-      {
-        label: "QER",
-        person: toSafeNumber(activeRow?.qer),
-        target: 10,
-        teamAvg: teamAverage.qer,
-        top: teamTop.qer,
-        inverse: true,
-      },
-      {
-        label: "Hours",
-        person: personHours,
-        target: teamAverage.hours,
-        teamAvg: teamAverage.hours,
-        top: teamTop.hours,
-        inverse: false,
-      },
-      {
-        label: "Error Index",
-        person: personErrors,
-        target: teamAverage.errors,
-        teamAvg: teamAverage.errors,
-        top: teamTop.errors,
-        inverse: true,
-      },
-    ];
-  }, [activeRow, levelLabel, roleLabel, teamAverage, teamTop]);
+  useEffect(() => {
+    if (
+      selectedAlertWeekKey !== "all" &&
+      !profileAlertWeekOptions.some((option) => option.value === selectedAlertWeekKey)
+    ) {
+      setSelectedAlertWeekKey("all");
+    }
+  }, [profileAlertWeekOptions, selectedAlertWeekKey]);
 
   return (
     <div className="space-y-7">
-      <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div className="h-36 bg-[linear-gradient(115deg,#fde68a_0%,#60a5fa_48%,#ef4444_100%)]" />
-        <div className="px-7 pb-7">
-          <div className="-mt-12 flex flex-wrap items-start justify-between gap-4">
-            <div className="flex items-start gap-4">
-              <div className="grid h-24 w-24 place-items-center rounded-3xl border-4 border-white bg-slate-900 text-3xl font-semibold text-white shadow-lg">
-                {avatarInitials || "MP"}
+      <section className="relative overflow-hidden rounded-[32px] border border-slate-200 shadow-sm">
+        <div className="absolute inset-0" style={{ backgroundImage: countryMeta.heroBackgroundImage }} />
+        <div className="absolute inset-0 bg-[linear-gradient(140deg,rgba(15,23,42,0.12)_0%,rgba(15,23,42,0.24)_100%)]" />
+        <div className="relative p-2 sm:p-3">
+          <div className="rounded-[28px] border border-white/50 bg-white/86 px-7 py-7 backdrop-blur-md sm:px-8">
+            <div className="flex flex-wrap items-start justify-between gap-5">
+              <div className="flex items-start gap-4">
+                <div className="grid h-24 w-24 place-items-center rounded-3xl border-4 border-white bg-slate-950 text-3xl font-semibold text-white shadow-lg">
+                  {avatarInitials || "MP"}
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    {t("Individual Profile", "Perfil individual")}
+                  </p>
+                  <h1 className="mt-2 font-[var(--font-space-grotesk)] text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl">
+                    {personName || t("Profile", "Perfil")}
+                  </h1>
+                </div>
               </div>
-              <div className="pt-10">
-                <p className="text-xs uppercase tracking-[0.18em] text-slate-400">
-                  Individual Profile
+
+              <div className="rounded-3xl border border-white/60 bg-white/76 px-5 py-4 text-right shadow-sm">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t("Status", "Estado")}</p>
+                <p className="mt-2 text-sm font-semibold text-slate-950">
+                  {isTeamLeadProfile
+                    ? t("Shift Leader Profile", "Perfil Shift Leader")
+                    : t("Operational Profile", "Perfil operativo")}
                 </p>
-                <h1 className="mt-1 font-[var(--font-space-grotesk)] text-4xl font-semibold tracking-tight text-slate-900">
-                  {personName || "Perfil"}
-                </h1>
-                <p className="mt-1 text-sm text-slate-600 sm:text-base">
-                  Performance Intelligence con enfoque en velocidad, calidad y consistencia semanal.
+                <p className="mt-1 text-xs text-slate-500">
+                  {snapshot?.generatedAt
+                    ? `${t("Updated", "Actualizado")} ${new Date(snapshot.generatedAt).toLocaleString(locale)}`
+                    : t("No snapshot available", "No hay snapshot disponible")}
                 </p>
               </div>
             </div>
-            <div className="pt-10 text-right">
-              <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Status</p>
-              <p className="mt-1 text-sm font-semibold text-slate-900">
-                {isTeamLeadProfile ? "Shift Leader Profile" : "Operational Profile"}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {snapshot?.generatedAt
-                  ? `Actualizado ${new Date(snapshot.generatedAt).toLocaleString("es-CO")}`
-                  : "Sin snapshot"}
-              </p>
-            </div>
-          </div>
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-[1.45fr_1fr]">
-            <article className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-slate-500">
-                Professional Snapshot
-              </p>
-              <p className="mt-2 text-sm leading-relaxed text-slate-700">
-                {notes.about}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">
-                  Team: {teamLabel}
-                </span>
-                <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">
-                  Rol: {roleLabel}
-                </span>
-                <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">
-                  Nivel: {levelLabel}
-                </span>
-                <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">
-                  Funciones: {functionsLabel}
-                </span>
-              </div>
-            </article>
+            <div className="mt-6 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+              <article className="rounded-[26px] border border-white/60 bg-white/72 p-5 shadow-sm">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t("Profile", "Perfil")}</p>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600">
+                  <span className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">
+                    {t("Team", "Equipo")}: {teamLabel}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">
+                    {t("Role", "Rol")}: {roleLabel}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">
+                    {t("Level", "Nivel")}: {formatLevelLabel(levelLabel)}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">
+                    {t("Functions", "Funciones")}: {functionsLabel}
+                  </span>
+                </div>
+              </article>
 
-            <article className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Controles</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {PRESET_OPTIONS.map((preset) => {
-                  const isActive = selectedPreset === preset.key;
-                  return (
-                    <button
-                      key={`person-preset-${preset.key}`}
-                      type="button"
-                      onClick={() => setSelectedPreset(preset.key)}
-                      className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition-all duration-200 ${
-                        isActive
-                          ? "bg-blue-600 text-white shadow-sm"
-                          : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100"
-                      }`}
-                    >
-                      {preset.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <div className="inline-flex rounded-xl bg-white p-1 ring-1 ring-slate-200">
-                  <button
-                    type="button"
-                    onClick={() => setProfileMode("global")}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                      profileMode === "global"
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    Global
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setProfileMode("weekly")}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                      profileMode === "weekly"
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    Semanal
-                  </button>
+              <article className="rounded-[26px] border border-white/60 bg-white/72 p-5 shadow-sm">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Controls</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {PRESET_OPTIONS.map((preset) => {
+                    const isActive = selectedPreset === preset.key;
+                    return (
+                      <button
+                        key={`person-preset-${preset.key}`}
+                        type="button"
+                        onClick={() => setSelectedPreset(preset.key)}
+                        className={`rounded-2xl px-3 py-2 text-xs font-semibold transition ${
+                          isActive
+                            ? "bg-slate-950 text-white shadow-sm"
+                            : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
                 </div>
 
-                {profileMode === "weekly" && (
-                  <div className="relative min-w-[240px] flex-1">
-                    <select
-                      value={selectedWeekKey}
-                      onChange={(event) => setSelectedWeekKey(event.target.value)}
-                      className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2 pr-9 text-xs text-slate-700 outline-none transition focus:border-blue-500"
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <div className="inline-flex rounded-2xl bg-white p-1 ring-1 ring-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setProfileMode("global")}
+                      className={`rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                        profileMode === "global"
+                          ? "bg-slate-950 text-white shadow-sm"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
                     >
-                      <option value="latest">
-                        Ultima semana ({activeWeekRow?.weekLabel ?? "Sin datos"})
-                      </option>
-                      {personWeeksForPreset.map((row) => (
-                        <option key={`profile-week-${getWeekKey(row)}`} value={getWeekKey(row)}>
-                          {row.weekLabel} ({row.firstDay} - {row.lastDay})
-                        </option>
-                      ))}
-                    </select>
-                    <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
-                      <ChevronDownIcon />
-                    </span>
+                      Global
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProfileMode("weekly")}
+                      className={`rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                        profileMode === "weekly"
+                          ? "bg-slate-950 text-white shadow-sm"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      Weekly
+                    </button>
                   </div>
-                )}
-              </div>
 
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">
-                  Preset visible: {selectedPresetLabel}
-                </span>
-                <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">
-                  Modo: {profileMode === "weekly" ? "Semanal" : "Global"}
-                </span>
-              </div>
-            </article>
+                  {profileMode === "weekly" && (
+                    <div className="relative min-w-[260px] flex-1">
+                      <select
+                        value={selectedWeekKey}
+                        onChange={(event) => setSelectedWeekKey(event.target.value)}
+                        className="w-full appearance-none rounded-2xl border border-slate-300 bg-white px-4 py-3 pr-10 text-sm text-slate-700 outline-none transition focus:border-blue-500"
+                      >
+                        <option value="latest">
+                          Latest week ({activeWeekRow?.weekLabel ?? "No data"})
+                        </option>
+                        {personWeeksForPreset.map((row) => (
+                          <option key={`profile-week-${getWeekKey(row)}`} value={getWeekKey(row)}>
+                            {row.weekLabel} ({row.firstDay} - {row.lastDay})
+                          </option>
+                        ))}
+                      </select>
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
+                        <ChevronDownIcon />
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600">
+                  <span className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">
+                    Visible country: {countryMeta.name}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">
+                    Preset: {selectedPresetLabel}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">
+                    Mode: {profileMode === "weekly" ? "Weekly" : "Global"}
+                  </span>
+                </div>
+              </article>
+            </div>
           </div>
         </div>
       </section>
@@ -747,11 +1213,11 @@ export default function PersonProfilePage() {
       {snapshot && isTeamLeadProfile && (
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-            Perfil de liderazgo
+            Leadership profile
           </h2>
           <p className="mt-2 text-sm text-slate-600">
-            Este perfil esta marcado como <span className="font-semibold text-slate-900">Shift Leader</span>.
-            Las metricas operativas individuales no se muestran.
+            This profile is marked as <span className="font-semibold text-slate-900">Shift Leader</span>.
+            Individual operational metrics are hidden for this profile.
           </p>
         </section>
       )}
@@ -766,7 +1232,7 @@ export default function PersonProfilePage() {
             <KpiCard
               title="Draft Files"
               value={formatNumber(activeRow.draftFiles, 0)}
-              tooltip="Cantidad total de archivos trabajados en Draft."
+              tooltip="Total files worked in Draft."
               sparkline={sparklineSeries.draftFiles}
               sparklineColor="#2563eb"
               delta={
@@ -780,7 +1246,7 @@ export default function PersonProfilePage() {
             <KpiCard
               title="QA Files"
               value={formatNumber(activeRow.qaFiles, 0)}
-              tooltip="Cantidad total de archivos revisados por QA."
+              tooltip="Total files reviewed by QA."
               sparkline={sparklineSeries.qaFiles}
               sparklineColor="#10b981"
               delta={
@@ -794,7 +1260,7 @@ export default function PersonProfilePage() {
             <KpiCard
               title="Draft Rate"
               value={formatNumber(activeRow.draftRate, 0)}
-              tooltip="Velocidad de Draft en sqft/h."
+              tooltip="Draft speed in sqft/h."
               sparkline={sparklineSeries.draftRate}
               sparklineColor="#2563eb"
               delta={
@@ -808,7 +1274,7 @@ export default function PersonProfilePage() {
             <KpiCard
               title="QA Rate"
               value={formatNumber(activeRow.qaRate, 0)}
-              tooltip="Velocidad de QA en sqft/h."
+              tooltip="QA speed in sqft/h."
               sparkline={sparklineSeries.qaRate}
               sparklineColor="#10b981"
               delta={
@@ -822,7 +1288,7 @@ export default function PersonProfilePage() {
             <KpiCard
               title="QER %"
               value={`${formatNumber(activeRow.qer, 1)}%`}
-              tooltip="QER = QA Time / Draft Time * 100. Menor es mejor."
+              tooltip="QER = QA Time / Draft Time * 100. Lower is better."
               sparkline={sparklineSeries.qer}
               sparklineColor="#ef4444"
               delta={
@@ -838,244 +1304,334 @@ export default function PersonProfilePage() {
             <KpiCard
               title="L1"
               value={formatNumber(activeRow.l1, 2)}
-              tooltip="Errores críticos por cada 1000."
+              tooltip="Critical errors per 1000."
               sparkline={sparklineSeries.l1}
               sparklineColor="#f59e0b"
             />
             <KpiCard
               title="L2"
               value={formatNumber(activeRow.l2, 2)}
-              tooltip="Errores medios por cada 1000."
+              tooltip="Medium-severity errors per 1000."
               sparkline={sparklineSeries.l2}
               sparklineColor="#0ea5e9"
             />
             <KpiCard
               title="L3"
               value={formatNumber(activeRow.l3, 2)}
-              tooltip="Errores menores por cada 1000."
+              tooltip="Low-severity errors per 1000."
               sparkline={sparklineSeries.l3}
               sparklineColor="#22c55e"
             />
           </section>
 
-          <section className="grid gap-4 xl:grid-cols-3">
-            <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h3 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
+          <section className="grid gap-4 xl:grid-cols-2">
+            <article className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
+              <h3 className="font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
                 Draft Rate trend
               </h3>
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={trendRows}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <p className="mt-1 text-sm text-slate-500">
+                Compare weekly Draft speed across all file presets.
+              </p>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={draftTrendComparisonRows}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#dbe4f0" />
                   <XAxis dataKey="week" />
                   <YAxis />
-                  <Tooltip />
+                  <Tooltip
+                    formatter={(value, name) => [
+                      value == null ? "-" : formatNumber(value, 0),
+                      String(name),
+                    ]}
+                  />
                   <Legend />
-                  <ReferenceLine y={roleLabel === "QA" ? QA_TARGET_MIN : LEVEL_TARGETS[(levelLabel as Level) ?? "Junior"] ?? 2500} stroke="#94a3b8" strokeDasharray="4 4" />
-                  <Line type="monotone" dataKey="draftRate" name="Draft Rate" stroke="#2563eb" strokeWidth={2.4} dot={{ r: 3 }} />
+                  <ReferenceLine y={draftTarget} stroke="#94a3b8" strokeDasharray="4 4" />
+                  {DRAFT_TREND_SERIES.map((series) => (
+                    <Line
+                      key={series.dataKey}
+                      type="monotone"
+                      dataKey={series.dataKey}
+                      name={series.label}
+                      stroke={series.color}
+                      strokeWidth={2.3}
+                      dot={false}
+                      activeDot={{ r: 4 }}
+                      connectNulls={false}
+                    />
+                  ))}
                 </LineChart>
               </ResponsiveContainer>
             </article>
 
-            <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h3 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
+            <article className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
+              <h3 className="font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
                 QA Rate trend
               </h3>
-              <ResponsiveContainer width="100%" height={260}>
+              <p className="mt-1 text-sm text-slate-500">Weekly evolution of QA speed.</p>
+              <ResponsiveContainer width="100%" height={300}>
                 <LineChart data={trendRows}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#dbe4f0" />
                   <XAxis dataKey="week" />
                   <YAxis />
                   <Tooltip />
                   <Legend />
                   <ReferenceLine y={QA_TARGET_MIN} stroke="#94a3b8" strokeDasharray="4 4" />
-                  <Line type="monotone" dataKey="qaRate" name="QA Rate" stroke="#10b981" strokeWidth={2.4} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="qaRate" name="QA Rate" stroke="#10b981" strokeWidth={2.5} dot={{ r: 3 }} />
                 </LineChart>
               </ResponsiveContainer>
             </article>
 
-            <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h3 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
+            <article className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
+              <h3 className="font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
                 QER trend
               </h3>
-              <ResponsiveContainer width="100%" height={260}>
+              <p className="mt-1 text-sm text-slate-500">Weekly QER tracking. Lower is better.</p>
+              <ResponsiveContainer width="100%" height={300}>
                 <LineChart data={trendRows}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#dbe4f0" />
                   <XAxis dataKey="week" />
                   <YAxis />
                   <Tooltip />
                   <Legend />
                   <ReferenceLine y={10} stroke="#94a3b8" strokeDasharray="4 4" />
-                  <Line type="monotone" dataKey="qer" name="QER %" stroke="#ef4444" strokeWidth={2.4} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="qer" name="QER %" stroke="#ef4444" strokeWidth={2.5} dot={{ r: 3 }} />
                 </LineChart>
               </ResponsiveContainer>
             </article>
-          </section>
 
-          <section className="grid gap-4 xl:grid-cols-2">
-            <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h3 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
+            <article className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
+              <h3 className="font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
                 Error profile (L1/L2/L3)
               </h3>
-              <ResponsiveContainer width="100%" height={280}>
+              <p className="mt-1 text-sm text-slate-500">Weekly error distribution.</p>
+              <ResponsiveContainer width="100%" height={300}>
                 <LineChart data={trendRows}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#dbe4f0" />
                   <XAxis dataKey="week" />
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Line type="monotone" dataKey="l1" name="L1" stroke="#f59e0b" strokeWidth={2.2} dot={{ r: 2.5 }} />
-                  <Line type="monotone" dataKey="l2" name="L2" stroke="#10b981" strokeWidth={2.2} dot={{ r: 2.5 }} />
-                  <Line type="monotone" dataKey="l3" name="L3" stroke="#2563eb" strokeWidth={2.2} dot={{ r: 2.5 }} />
+                  <Line type="monotone" dataKey="l1" name="L1" stroke="#f59e0b" strokeWidth={2.3} dot={{ r: 2.5 }} />
+                  <Line type="monotone" dataKey="l2" name="L2" stroke="#10b981" strokeWidth={2.3} dot={{ r: 2.5 }} />
+                  <Line type="monotone" dataKey="l3" name="L3" stroke="#2563eb" strokeWidth={2.3} dot={{ r: 2.5 }} />
                 </LineChart>
               </ResponsiveContainer>
             </article>
+          </section>
 
-            <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h3 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-                Benchmark vs target / team / top
-              </h3>
-              <div className="mt-4 space-y-4">
-                {benchmarkRows.map((row) => {
-                  const maxValue = Math.max(row.person, row.target, row.teamAvg, row.top, 1);
-                  return (
-                    <div key={row.label} className="space-y-2">
-                      <div className="flex items-center justify-between text-xs text-slate-500">
-                        <span className="font-semibold text-slate-700">{row.label}</span>
-                        <span>
-                          Yo: {formatNumber(row.person, row.label === "QER" ? 1 : 0)}
-                          {row.label === "QER" ? "%" : ""}
-                        </span>
-                      </div>
-                      <div className="space-y-1.5">
-                        <div className="h-2 rounded-full bg-slate-100">
-                          <div className="h-full rounded-full bg-blue-600" style={{ width: `${(row.person / maxValue) * 100}%` }} />
-                        </div>
-                        <div className="h-2 rounded-full bg-slate-100">
-                          <div className="h-full rounded-full bg-slate-500" style={{ width: `${(row.target / maxValue) * 100}%` }} />
-                        </div>
-                        <div className="h-2 rounded-full bg-slate-100">
-                          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${(row.teamAvg / maxValue) * 100}%` }} />
-                        </div>
-                        <div className="h-2 rounded-full bg-slate-100">
-                          <div className="h-full rounded-full bg-amber-500" style={{ width: `${(row.top / maxValue) * 100}%` }} />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-4 gap-2 text-[11px] text-slate-500">
-                        <span className="rounded bg-blue-50 px-2 py-1 text-center text-blue-700">Yo</span>
-                        <span className="rounded bg-slate-100 px-2 py-1 text-center text-slate-700">Target</span>
-                        <span className="rounded bg-emerald-50 px-2 py-1 text-center text-emerald-700">Team Avg</span>
-                        <span className="rounded bg-amber-50 px-2 py-1 text-center text-amber-700">Top</span>
-                      </div>
-                    </div>
-                  );
-                })}
+          <section className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
+                  Weekly history
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Click any row to focus that week and compare its operating context.
+                </p>
               </div>
-            </article>
-          </section>
-
-          <section className="grid gap-4 xl:grid-cols-3">
-            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.14em] text-slate-500">About</p>
-              <textarea
-                value={notes.about}
-                onChange={(event) => setNotes((prev) => ({ ...prev, about: event.target.value }))}
-                className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500"
-              />
-            </article>
-            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Strengths</p>
-              <textarea
-                value={notes.strengths}
-                onChange={(event) => setNotes((prev) => ({ ...prev, strengths: event.target.value }))}
-                className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500"
-              />
-            </article>
-            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Focus Areas</p>
-              <textarea
-                value={notes.focusAreas}
-                onChange={(event) => setNotes((prev) => ({ ...prev, focusAreas: event.target.value }))}
-                className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500"
-              />
-            </article>
-          </section>
-
-          <section className="grid gap-4 xl:grid-cols-3">
-            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Recent Performance Notes</p>
-              <textarea
-                value={notes.recentNotes}
-                onChange={(event) => setNotes((prev) => ({ ...prev, recentNotes: event.target.value }))}
-                className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500"
-              />
-            </article>
-            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Achievements</p>
-              <textarea
-                value={notes.achievements}
-                onChange={(event) => setNotes((prev) => ({ ...prev, achievements: event.target.value }))}
-                className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500"
-              />
-            </article>
-            <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Notes from Shift Leader</p>
-              <textarea
-                value={notes.shiftLeaderNotes}
-                onChange={(event) => setNotes((prev) => ({ ...prev, shiftLeaderNotes: event.target.value }))}
-                className="mt-2 min-h-[110px] w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500"
-              />
-            </article>
-          </section>
-
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center justify-between">
-              <h2 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-                Weekly history (clickable)
-              </h2>
-              <span className="text-xs text-slate-500">Click en una fila para enfocar semana</span>
+              <span className="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-600">
+                {personWeeksForPreset.length} visible weeks
+              </span>
             </div>
-            <div className="mt-4 max-h-[360px] overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="sticky top-0 border-b border-slate-200 bg-white text-left text-slate-500">
-                    <th className="py-3 pr-4">Week</th>
-                    <th className="py-3 pr-4">From</th>
-                    <th className="py-3 pr-4">To</th>
-                    <th className="py-3 pr-4">Draft Rate</th>
-                    <th className="py-3 pr-4">QA Rate</th>
-                    <th className="py-3 pr-4">QER</th>
-                    <th className="py-3 pr-4">Files D/QA</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {personWeeksForPreset.map((row) => {
-                    const key = getWeekKey(row);
-                    const active = key === activeWeekKey;
-                    return (
-                      <tr
-                        key={`history-week-${key}`}
-                        onClick={() => {
-                          setProfileMode("weekly");
-                          setSelectedWeekKey(key);
-                        }}
-                        className={`cursor-pointer border-b border-slate-100 transition hover:bg-blue-50 ${
-                          active ? "bg-blue-50/70" : ""
-                        }`}
-                      >
-                        <td className="py-3 pr-4 font-semibold text-slate-900">{row.weekLabel}</td>
-                        <td className="py-3 pr-4">{row.firstDay}</td>
-                        <td className="py-3 pr-4">{row.lastDay}</td>
-                        <td className="py-3 pr-4">{formatNumber(row.draftRate, 0)}</td>
-                        <td className="py-3 pr-4">{formatNumber(row.qaRate, 0)}</td>
-                        <td className="py-3 pr-4">{formatNumber(row.qer, 1)}%</td>
-                        <td className="py-3 pr-4">
-                          {formatNumber(row.draftFiles, 0)} / {formatNumber(row.qaFiles, 0)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div className="mt-5 overflow-hidden rounded-[24px] border border-slate-200">
+              <div className="max-h-[430px] overflow-auto">
+                <table className="min-w-full border-separate border-spacing-0 text-sm">
+                  <thead>
+                    <tr className="sticky top-0 z-10 bg-slate-950 text-left text-xs uppercase tracking-[0.14em] text-slate-200">
+                      <th className="px-5 py-4">Week</th>
+                      <th className="px-4 py-4">From</th>
+                      <th className="px-4 py-4">To</th>
+                      <th className="px-4 py-4">Draft Rate</th>
+                      <th className="px-4 py-4">QA Rate</th>
+                      <th className="px-4 py-4">QER</th>
+                      <th className="px-4 py-4">Files D / QA</th>
+                      <th className="px-4 py-4">Hours D / QA</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white">
+                    {personWeeksForPreset.map((row, index) => {
+                      const key = getWeekKey(row);
+                      const active = key === activeWeekKey;
+                      return (
+                        <tr
+                          key={`history-week-${key}`}
+                          onClick={() => {
+                            setProfileMode("weekly");
+                            setSelectedWeekKey(key);
+                          }}
+                          className={`cursor-pointer transition ${
+                            active
+                              ? "bg-[linear-gradient(90deg,rgba(37,99,235,0.08)_0%,rgba(15,23,42,0.02)_100%)]"
+                              : index % 2 === 0
+                                ? "bg-white"
+                                : "bg-slate-50/50"
+                          } hover:bg-blue-50/60`}
+                        >
+                          <td className="border-b border-slate-100 px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <span className={`h-2.5 w-2.5 rounded-full ${active ? "bg-blue-600" : "bg-slate-300"}`} />
+                              <div>
+                                <p className="font-semibold text-slate-950">{row.weekLabel}</p>
+                                <p className="text-xs text-slate-500">Open week details</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="border-b border-slate-100 px-4 py-4 text-slate-600">{row.firstDay}</td>
+                          <td className="border-b border-slate-100 px-4 py-4 text-slate-600">{row.lastDay}</td>
+                          <td className="border-b border-slate-100 px-4 py-4">
+                            <span className={`inline-flex rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${getRateToneClasses(row.draftRate, draftTarget)}`}>
+                              {formatNumber(row.draftRate, 0)}
+                            </span>
+                          </td>
+                          <td className="border-b border-slate-100 px-4 py-4">
+                            <span className={`inline-flex rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${getRateToneClasses(row.qaRate, QA_TARGET_MIN)}`}>
+                              {formatNumber(row.qaRate, 0)}
+                            </span>
+                          </td>
+                          <td className="border-b border-slate-100 px-4 py-4">
+                            <span className={`inline-flex rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${getQerToneClasses(row.qer)}`}>
+                              {formatNumber(row.qer, 1)}%
+                            </span>
+                          </td>
+                          <td className="border-b border-slate-100 px-4 py-4">
+                            <span className="inline-flex rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
+                              {formatNumber(row.draftFiles, 0)} / {formatNumber(row.qaFiles, 0)}
+                            </span>
+                          </td>
+                          <td className="border-b border-slate-100 px-4 py-4">
+                            <span className="inline-flex rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
+                              {formatNumber(row.draftHours, 2)} / {formatNumber(row.qaHours, 2)}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Profile alerts</p>
+                <h2 className="mt-2 font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
+                  Alerts related to {personName}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Only files where this person appears as Drafter or QA are shown here.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="rounded-full bg-slate-100 px-3 py-1.5 font-semibold text-slate-700">
+                  {alertsLoading ? "Loading..." : `${alertSummary.total} alerts`}
+                </span>
+                <span className="rounded-full bg-rose-50 px-3 py-1.5 font-semibold text-rose-700">
+                  {alertsLoading ? "-" : `${alertSummary.highCount} high`}
+                </span>
+                <span className="rounded-full bg-amber-50 px-3 py-1.5 font-semibold text-amber-700">
+                  {alertsLoading ? "-" : `${alertSummary.issueCount} issues`}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-[320px_1fr]">
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Week
+                </p>
+                <div className="relative mt-2">
+                  <select
+                    value={selectedAlertWeekKey}
+                    onChange={(event) => setSelectedAlertWeekKey(event.target.value)}
+                    disabled={alertsLoading || profileAlertWeekOptions.length === 0}
+                    className="w-full appearance-none rounded-2xl border border-slate-300 bg-white px-4 py-3 pr-10 text-sm text-slate-700 outline-none transition focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    <option value="all">All weeks</option>
+                    {profileAlertWeekOptions.map((option) => (
+                      <option key={`profile-alert-week-${option.value}`} value={option.value}>
+                        {option.label} - {option.helper}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
+                    <ChevronDownIcon />
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(135deg,rgba(248,250,252,0.92)_0%,rgba(255,255,255,1)_100%)] p-4">
+                {alertsLoading ? (
+                  <p className="text-sm text-slate-500">Loading profile alerts...</p>
+                ) : filteredProfileAlerts.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    No alerts were found for this person with the current filter.
+                  </p>
+                ) : (
+                  <div className="max-h-[420px] overflow-auto pr-1">
+                    <div className="space-y-3">
+                      {filteredProfileAlerts.map((alert) => (
+                        <article
+                          key={alert.id}
+                          className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap gap-2 text-xs">
+                                <span
+                                  className={`rounded-full border px-3 py-1 font-semibold uppercase ${getAlertToneClasses(
+                                    alert.severity
+                                  )}`}
+                                >
+                                  {alert.severity}
+                                </span>
+                                <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                  {alert.weekLabel}
+                                </span>
+                                <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                  {alert.firstDay} - {alert.lastDay}
+                                </span>
+                              </div>
+
+                              {isUrl(alert.fileName) ? (
+                                <a
+                                  href={alert.fileName}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-3 block break-all text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 transition hover:text-blue-700 hover:decoration-blue-400"
+                                >
+                                  {alert.fileName}
+                                </a>
+                              ) : (
+                                <p className="mt-3 break-all text-sm font-semibold text-slate-900">
+                                  {alert.fileName}
+                                </p>
+                              )}
+                              <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                                <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
+                                  Drafter: {alert.drafter}
+                                </span>
+                                <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
+                                  QA: {alert.qa}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="min-w-[220px] rounded-2xl bg-slate-50 px-4 py-3">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                Issue
+                              </p>
+                              <p className="mt-1 text-sm font-semibold text-slate-900">{alert.issue}</p>
+                              <p className="mt-2 text-sm text-slate-600">{alert.value}</p>
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </section>
         </>
@@ -1088,8 +1644,8 @@ export default function PersonProfilePage() {
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <p className="text-sm text-slate-600">
               {profileMode === "weekly"
-                ? "No hay metricas semanales para esta persona en el preset actual."
-                : "No hay metricas para esta persona en los presets actuales."}
+                ? "No weekly metrics are available for this person in the current preset."
+                : "No metrics are available for this person in the current presets."}
             </p>
           </section>
         )}
@@ -1097,13 +1653,13 @@ export default function PersonProfilePage() {
       {!snapshot && (
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <p className="text-sm text-slate-600">
-            No hay snapshot disponible. Carga archivos en Data Center.
+            No snapshot is available yet. Upload files in Data Center.
           </p>
           <Link
             href="/upload"
             className="mt-4 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
           >
-            Ir a Data Center
+            Go to Data Center
           </Link>
         </section>
       )}
@@ -1114,13 +1670,13 @@ export default function PersonProfilePage() {
             href="/teams"
             className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
           >
-            Volver a Team
+            Back to Team
           </Link>
           <Link
             href="/profile"
             className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-200"
           >
-            Volver a Profile
+            Back to Profile
           </Link>
         </div>
       </section>

@@ -57,6 +57,7 @@ import {
   type TeamMemberSnapshotRow,
   type TeamLeaderRow,
 } from "@/lib/store/dashboard-snapshot";
+import { persistRemoteDashboardState } from "@/lib/store/remote-dashboard-state";
 
 type CsvRow = Record<string, string>;
 
@@ -842,6 +843,7 @@ export default function UploadPage() {
   const standardInputRef = useRef<HTMLInputElement | null>(null);
   const australiaInputRef = useRef<HTMLInputElement | null>(null);
   const lastSerializedSnapshotRef = useRef("");
+  const lastSerializedCloudStateRef = useRef("");
   const skippedInitialBatchPersistRef = useRef(false);
   const lastPersistedBatchStampRef = useRef("");
   const [forceSnapshotRefresh, setForceSnapshotRefresh] = useState(false);
@@ -1225,6 +1227,23 @@ export default function UploadPage() {
     setError("");
     resetFiltersForNewData();
     setForceSnapshotRefresh(true);
+
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(DASHBOARD_SNAPSHOT_KEY);
+      lastSerializedSnapshotRef.current = "";
+      lastSerializedCloudStateRef.current = "";
+      window.dispatchEvent(new Event(DASHBOARD_SNAPSHOT_EVENT));
+    }
+
+    void persistRemoteDashboardState({
+      snapshot: null,
+      batches: {
+        standard: [],
+        australia: [],
+        updatedAt: new Date().toISOString(),
+      },
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
   }
 
   async function openNativeFilePicker(target: UploadTarget) {
@@ -2721,6 +2740,17 @@ export default function UploadPage() {
     const serializedSnapshot = JSON.stringify(snapshot);
     if (serializedSnapshot === lastSerializedSnapshotRef.current) return;
 
+    const cloudStatePayload = {
+      snapshot,
+      batches: {
+        standard: standardBatches,
+        australia: australiaBatches,
+        updatedAt: snapshot.generatedAt,
+      },
+      updatedAt: snapshot.generatedAt,
+    };
+    const serializedCloudState = JSON.stringify(cloudStatePayload);
+
     let cancelled = false;
     const commitSnapshot = () => {
       if (cancelled) return;
@@ -2731,6 +2761,11 @@ export default function UploadPage() {
         lastSerializedSnapshotRef.current = serializedSnapshot;
         window.dispatchEvent(new Event(DASHBOARD_SNAPSHOT_EVENT));
         setForceSnapshotRefresh(false);
+
+        if (serializedCloudState !== lastSerializedCloudStateRef.current) {
+          lastSerializedCloudStateRef.current = serializedCloudState;
+          void persistRemoteDashboardState(cloudStatePayload).catch(() => {});
+        }
       }
     };
 
@@ -2783,6 +2818,8 @@ export default function UploadPage() {
     topDraftersByTeam,
     topQaByTeam,
     presetDistribution,
+    standardBatches,
+    australiaBatches,
     teamComparisonByPreset,
     teamMembersByPreset,
     weeklyTeamsByPreset,
@@ -3036,24 +3073,30 @@ export default function UploadPage() {
 
   return (
     <div className="space-y-10">
-      <section className="rounded-3xl border border-slate-200 bg-gradient-to-r from-slate-900 via-blue-900 to-slate-800 px-6 py-8 text-white shadow-lg">
-        <p className="text-xs uppercase tracking-[0.2em] text-blue-200/90">
-          Upload Center
-        </p>
-        <h2 className="mt-2 font-[var(--font-space-grotesk)] text-3xl font-semibold tracking-tight sm:text-4xl">
-          Metric Planitar
-        </h2>
-        <p className="mt-3 max-w-3xl text-sm text-blue-100/90 sm:text-base">
-          Sube los metrics reports, activa los presets operativos y compara el
-          rendimiento de Draft y QA por equipo con una vista ejecutiva.
-        </p>
+      <section className="relative overflow-hidden rounded-[32px] border border-amber-200/70 bg-[linear-gradient(180deg,#FCD116_0%,#FCD116_52%,#003893_52%,#003893_76%,#CE1126_76%,#CE1126_100%)] px-6 py-8 shadow-[0_24px_64px_-36px_rgba(15,23,42,0.3)]">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_22%,rgba(255,255,255,0.5),transparent_28%),linear-gradient(135deg,rgba(255,255,255,0.22),rgba(255,255,255,0.02)_58%)]"
+        />
+        <div className="relative max-w-4xl rounded-[28px] border border-white/45 bg-white/72 px-5 py-5 shadow-[0_20px_46px_-30px_rgba(15,23,42,0.42)] backdrop-blur-[4px] sm:px-6">
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-700">
+            Upload Center
+          </p>
+          <h2 className="mt-2 font-[var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+            Metrics Planitar
+          </h2>
+          <p className="mt-3 max-w-3xl text-sm text-slate-700 sm:text-base">
+            Upload your metrics reports, activate operational presets, and compare
+            Draft and QA performance by team with an executive view.
+          </p>
+        </div>
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-          <p className="mb-1 text-base font-semibold">Archivo Standard</p>
+        <div className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(248,250,252,0.98)_100%)] p-5 shadow-sm">
+          <p className="mb-1 text-base font-semibold text-slate-950">Standard File</p>
           <p className="mb-3 text-xs text-slate-500">
-            Carga el CSV base del equipo.
+            Upload the main team CSV file.
           </p>
           <input
             id="standard-upload"
@@ -3064,32 +3107,32 @@ export default function UploadPage() {
             onChange={(e) => {
               handleInputSelection("standard", e.currentTarget.files);
             }}
-            className="block w-full cursor-pointer rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white hover:border-slate-400"
+            className="block w-full cursor-pointer rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 px-3 py-3 text-xs text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-blue-700 file:px-4 file:py-2.5 file:text-xs file:font-semibold file:text-white hover:border-blue-300"
           />
           {pendingStandardFiles.length > 0 && (
-            <p className="mt-2 text-xs text-blue-700">
-              Pendientes: {pendingStandardFiles.length} archivo(s) seleccionados para procesar.
+            <p className="mt-2 text-xs font-medium text-blue-700">
+              Pending: {pendingStandardFiles.length} file(s) selected for processing.
             </p>
           )}
           <button
             type="button"
             onClick={() => void openNativeFilePicker("standard")}
-            className="mt-2 inline-flex items-center rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+            className="mt-3 inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-semibold text-slate-800 transition hover:border-slate-400 hover:bg-slate-50"
           >
-            Abrir explorador Standard
+            Open Standard Browser
           </button>
           {standardFile && (
-            <p className="mt-2 text-xs text-emerald-700">
-              OK Ãºltimo: {standardFile} | Historial: {standardBatches.length} archivos /{" "}
-              {standardRowCount} filas
+            <p className="mt-3 rounded-2xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700 ring-1 ring-emerald-200">
+              Latest: {standardFile} | History: {standardBatches.length} files /{" "}
+              {standardRowCount} rows
             </p>
           )}
         </div>
 
-        <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-          <p className="mb-1 text-base font-semibold">Archivo Australia</p>
+        <div className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(248,250,252,0.98)_100%)] p-5 shadow-sm">
+          <p className="mb-1 text-base font-semibold text-slate-950">Australia File</p>
           <p className="mb-3 text-xs text-slate-500">
-            Carga el CSV adicional para combinar fuentes.
+            Upload the additional CSV used to combine sources.
           </p>
           <input
             id="australia-upload"
@@ -3100,24 +3143,24 @@ export default function UploadPage() {
             onChange={(e) => {
               handleInputSelection("australia", e.currentTarget.files);
             }}
-            className="block w-full cursor-pointer rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white hover:border-slate-400"
+            className="block w-full cursor-pointer rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 px-3 py-3 text-xs text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-blue-700 file:px-4 file:py-2.5 file:text-xs file:font-semibold file:text-white hover:border-blue-300"
           />
           {pendingAustraliaFiles.length > 0 && (
-            <p className="mt-2 text-xs text-blue-700">
-              Pendientes: {pendingAustraliaFiles.length} archivo(s) seleccionados para procesar.
+            <p className="mt-2 text-xs font-medium text-blue-700">
+              Pending: {pendingAustraliaFiles.length} file(s) selected for processing.
             </p>
           )}
           <button
             type="button"
             onClick={() => void openNativeFilePicker("australia")}
-            className="mt-2 inline-flex items-center rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+            className="mt-3 inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-semibold text-slate-800 transition hover:border-slate-400 hover:bg-slate-50"
           >
-            Abrir explorador Australia
+            Open Australia Browser
           </button>
           {australiaFile && (
-            <p className="mt-2 text-xs text-emerald-700">
-              OK Ãºltimo: {australiaFile} | Historial: {australiaBatches.length} archivos /{" "}
-              {australiaRowCount} filas
+            <p className="mt-3 rounded-2xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700 ring-1 ring-emerald-200">
+              Latest: {australiaFile} | History: {australiaBatches.length} files /{" "}
+              {australiaRowCount} rows
             </p>
           )}
         </div>
@@ -3128,20 +3171,20 @@ export default function UploadPage() {
           type="button"
           onClick={processSelectedInputs}
           disabled={isProcessingUploads}
-          className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+          className="inline-flex items-center rounded-xl bg-blue-700 px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-800"
         >
-          {isProcessingUploads ? "Procesando..." : "Procesar archivos y mostrar metricas"}
+          {isProcessingUploads ? "Processing..." : "Process Files and Show Metrics"}
         </button>
         <button
           type="button"
           onClick={clearUploadHistory}
           disabled={isProcessingUploads}
-          className="inline-flex items-center rounded-lg bg-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Reiniciar historial semanal
+          Reset Weekly History
         </button>
         <p className="text-xs text-slate-500">
-          Puedes subir varios CSV por semana y se acumulan automÃ¡ticamente en el historial.
+          You can upload multiple CSV files per week and they accumulate automatically in history.
         </p>
       </div>
 
@@ -3153,7 +3196,7 @@ export default function UploadPage() {
 
       {hasData && (
         <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-          Archivos procesados correctamente. La analítica se muestra en Dashboard, Team, History y Profile.
+          Files processed successfully. Analytics are now available in Dashboard, Teams, History, and Profile.
         </section>
       )}
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -18,11 +18,18 @@ import type {
   SnapshotPresetMode,
   TeamMemberSnapshotRow,
 } from "@/lib/store/dashboard-snapshot";
+import { useAppLanguage } from "@/lib/i18n/app-language";
 import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
 import type { WeeklyTeamRow } from "@/lib/metrics/types";
 import { InfoTooltip } from "@/components/shared/info-tooltip";
 
-type DashboardPresetMode = "combined" | "std" | "premium" | "ads" | "gt10k";
+type DashboardPresetMode =
+  | "combined"
+  | "std"
+  | "premium"
+  | "ads_std"
+  | "ads_prem"
+  | "gt10k";
 type TimeMode = "weekly" | "global";
 type GroupMode = "country" | "pod";
 
@@ -76,6 +83,13 @@ type TopPerformer = {
   files: number;
 };
 
+type MultiSelectOption = {
+  value: string;
+  label: string;
+  helper?: string;
+  tone?: string;
+};
+
 const PRESET_OPTIONS: Array<{
   key: DashboardPresetMode;
   label: string;
@@ -84,27 +98,32 @@ const PRESET_OPTIONS: Array<{
   {
     key: "combined",
     label: "Combined",
-    description: "Consolidado general de Draft + QA.",
+    description: "Combined Draft and QA view.",
   },
   {
     key: "std",
     label: "Std",
-    description: "Solo trabajo standard.",
+    description: "Standard work only.",
   },
   {
     key: "premium",
     label: "Premium",
-    description: "Solo trabajo premium.",
+    description: "Premium work only.",
   },
   {
-    key: "ads",
-    label: "ADS",
-    description: "ADS Std + ADS Prem.",
+    key: "ads_std",
+    label: "ADS Std",
+    description: "ADS standard work only.",
+  },
+  {
+    key: "ads_prem",
+    label: "ADS Prem",
+    description: "ADS premium work only.",
   },
   {
     key: "gt10k",
     label: ">10k",
-    description: "Trabajo above 10k.",
+    description: "Work above 10k.",
   },
 ];
 
@@ -128,6 +147,42 @@ const CHART_COLORS = [
   "#84cc16",
   "#ec4899",
 ];
+
+const COUNTRY_META: Record<
+  string,
+  { code: string; label: string; tone: string; softTone: string }
+> = {
+  CO: {
+    code: "CO",
+    label: "Colombia",
+    tone: "bg-amber-50 text-amber-700 ring-amber-200",
+    softTone: "border-amber-200 bg-amber-50/70",
+  },
+  PH: {
+    code: "PH",
+    label: "Philippines",
+    tone: "bg-sky-50 text-sky-700 ring-sky-200",
+    softTone: "border-sky-200 bg-sky-50/70",
+  },
+  MK: {
+    code: "MK",
+    label: "North Macedonia",
+    tone: "bg-rose-50 text-rose-700 ring-rose-200",
+    softTone: "border-rose-200 bg-rose-50/70",
+  },
+  MY: {
+    code: "MY",
+    label: "Malaysia",
+    tone: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+    softTone: "border-indigo-200 bg-indigo-50/70",
+  },
+  OT: {
+    code: "OT",
+    label: "Other",
+    tone: "bg-slate-100 text-slate-700 ring-slate-200",
+    softTone: "border-slate-200 bg-slate-50/80",
+  },
+};
 
 const isRrePodTeam = (team: string) => /^RRE[A-Z]{2,4}\d+$/i.test(String(team ?? "").trim());
 
@@ -172,14 +227,24 @@ function getCountryCode(team: string) {
   return "OT";
 }
 
+function getCountryMeta(teamOrCode: string) {
+  const code = String(teamOrCode ?? "").length <= 3
+    ? String(teamOrCode ?? "").trim().toUpperCase()
+    : getCountryCode(teamOrCode);
+  return COUNTRY_META[code] ?? COUNTRY_META.OT;
+}
+
+function getGroupDisplayLabel(groupKey: string, mode: GroupMode) {
+  if (mode === "country") {
+    const meta = getCountryMeta(groupKey);
+    return `${meta.code} - ${meta.label}`;
+  }
+  return String(groupKey ?? "").trim().toUpperCase();
+}
+
 function getGroupKey(team: string, groupMode: GroupMode) {
   if (groupMode === "country") return getCountryCode(team);
   return String(team ?? "").trim().toUpperCase();
-}
-
-function getPresetSnapshotKey(preset: DashboardPresetMode): SnapshotPresetMode | null {
-  if (preset === "ads") return null;
-  return preset;
 }
 
 function getRowsByPreset<T>(
@@ -187,12 +252,7 @@ function getRowsByPreset<T>(
   preset: DashboardPresetMode
 ) {
   if (!source) return [] as T[];
-  if (preset === "ads") {
-    return [...(source.ads_std ?? []), ...(source.ads_prem ?? [])];
-  }
-  const key = getPresetSnapshotKey(preset);
-  if (!key) return [];
-  return source[key] ?? [];
+  return source[preset] ?? [];
 }
 
 function getWeightedAverage(rows: Array<{ value: number; weight: number }>) {
@@ -245,6 +305,29 @@ function getTopPerformers(
   return top;
 }
 
+function CountryBadge({
+  teamOrCode,
+  compact = false,
+}: {
+  teamOrCode: string;
+  compact?: boolean;
+}) {
+  const meta = getCountryMeta(teamOrCode);
+  const code = String(teamOrCode ?? "").length <= 3
+    ? String(teamOrCode ?? "").trim().toUpperCase()
+    : getCountryCode(teamOrCode);
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${meta.tone} ${
+        compact ? "px-2 py-0.5 text-[10px]" : ""
+      }`}
+    >
+      <span>{meta.code || code}</span>
+    </span>
+  );
+}
+
 function TogglePill({
   label,
   active,
@@ -266,6 +349,202 @@ function TogglePill({
     >
       {label}
     </button>
+  );
+}
+
+function FilterButtonIcon({ open }: { open: boolean }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`}>
+      <path
+        d="m5 7 5 6 5-6"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MultiSelectPopover({
+  label,
+  options,
+  selectedValues,
+  onChange,
+  emptyMessage,
+}: {
+  label: string;
+  options: MultiSelectOption[];
+  selectedValues: string[];
+  onChange: (values: string[]) => void;
+  emptyMessage: string;
+}) {
+  const { language } = useAppLanguage();
+  const isSpanish = language === "es";
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const allSelected = options.length > 0 && selectedValues.length === options.length;
+  const summary =
+    selectedValues.length === 0
+      ? isSpanish
+        ? "Sin seleccion"
+        : "No selection"
+      : allSelected
+        ? isSpanish
+          ? `Todos (${options.length})`
+          : `All (${options.length})`
+        : `${selectedValues.length} ${isSpanish ? "seleccionados" : "selected"}`;
+
+  useEffect(() => {
+    function handleOutsideClick(event: MouseEvent) {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    if (open) {
+      window.addEventListener("mousedown", handleOutsideClick);
+    }
+
+    return () => {
+      window.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className={`flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
+          open
+            ? "border-blue-300 bg-white shadow-lg shadow-blue-100/60"
+            : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+        }`}
+      >
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            {label}
+          </p>
+          <p className="mt-1 text-sm font-medium text-slate-900">{summary}</p>
+        </div>
+        <div className="flex items-center gap-2 text-slate-500">
+          <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-600">
+            {selectedValues.length}/{options.length}
+          </span>
+          <FilterButtonIcon open={open} />
+        </div>
+      </button>
+
+      {open ? (
+        <div className="absolute left-0 right-0 top-[calc(100%+12px)] z-30 rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl shadow-slate-200/70">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-slate-900">{label}</p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onChange(options.map((option) => option.value))}
+                className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
+              >
+                {isSpanish ? "Seleccionar todo" : "Select all"}
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
+              >
+                {isSpanish ? "Limpiar todo" : "Clear all"}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
+            {options.length > 0 ? (
+              options.map((option) => {
+                const checked = selectedValues.includes(option.value);
+                return (
+                  <label
+                    key={`${label}-${option.value}`}
+                    className={`flex cursor-pointer items-center justify-between rounded-2xl border px-3 py-2.5 transition ${
+                      checked
+                        ? "border-blue-200 bg-blue-50/70"
+                        : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          onChange(
+                            checked
+                              ? selectedValues.filter((value) => value !== option.value)
+                              : [...selectedValues, option.value]
+                          )
+                        }
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-slate-900">
+                          {option.label}
+                        </span>
+                        {option.helper ? (
+                          <span className="block text-xs text-slate-500">{option.helper}</span>
+                        ) : null}
+                      </span>
+                    </span>
+                    {option.tone ? (
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ring-1 ${option.tone}`}>
+                        {option.value}
+                      </span>
+                    ) : null}
+                  </label>
+                );
+              })
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                {emptyMessage}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WeekSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string; helper?: string }>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="text-[11px] uppercase tracking-[0.14em] text-slate-500">{label}</span>
+      <div className="relative mt-2">
+        <select
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 py-3 pr-11 text-sm font-medium text-slate-900 outline-none transition hover:border-slate-300 focus:border-blue-400 focus:shadow-[0_0_0_4px_rgba(59,130,246,0.12)]"
+        >
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.helper ? `${option.label} - ${option.helper}` : option.label}
+            </option>
+          ))}
+        </select>
+        <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-500">
+          <FilterButtonIcon open={false} />
+        </span>
+      </div>
+    </label>
   );
 }
 
@@ -329,6 +608,7 @@ function TopThreeCard({
   tone: "blue" | "emerald";
   rows: TopPerformer[];
 }) {
+  const { language } = useAppLanguage();
   const toneClasses =
     tone === "blue"
       ? "bg-blue-50 text-blue-700 ring-blue-200"
@@ -369,7 +649,7 @@ function TopThreeCard({
         ))}
         {rows.length === 0 ? (
           <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">
-            Sin resultados para este preset.
+            {language === "es" ? "Sin resultados para este preset." : "No results for this preset."}
           </p>
         ) : null}
       </div>
@@ -378,30 +658,38 @@ function TopThreeCard({
 }
 
 function EmptyState() {
+  const { language } = useAppLanguage();
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
       <h2 className="font-[var(--font-space-grotesk)] text-2xl font-semibold text-slate-900">
-        Aun no hay datos operativos
+        {language === "es" ? "Aun no hay datos operativos" : "No operational data is available yet"}
       </h2>
       <p className="mt-2 max-w-xl text-sm text-slate-600">
-        Carga y procesa CSV en Data Center para activar Dashboard, Teams y Profile.
+        {language === "es"
+          ? "Carga y procesa CSV en Data Center para activar Dashboard, Teams y Profile."
+          : "Upload and process CSV files in Data Center to activate Dashboard, Teams, and Profile."}
       </p>
       <Link
         href="/upload"
         className="mt-5 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
       >
-        Ir a Data Center
+        {language === "es" ? "Ir a Data Center" : "Go to Data Center"}
       </Link>
     </section>
   );
 }
 
 export default function HomePage() {
+  const { language, locale } = useAppLanguage();
   const snapshot = useDashboardSnapshot();
+  const isSpanish = language === "es";
+  const t = (en: string, es: string) => (isSpanish ? es : en);
   const [presetMode, setPresetMode] = useState<DashboardPresetMode>("combined");
   const [timeMode, setTimeMode] = useState<TimeMode>("weekly");
   const [groupMode, setGroupMode] = useState<GroupMode>("country");
   const [selectedWeekKey, setSelectedWeekKey] = useState<string | null>(null);
+  const [selectedCountries, setSelectedCountries] = useState<string[] | null>(null);
+  const [selectedPods, setSelectedPods] = useState<string[] | null>(null);
 
   const selectedPreset = PRESET_OPTIONS.find((item) => item.key === presetMode) ?? PRESET_OPTIONS[0];
 
@@ -410,19 +698,86 @@ export default function HomePage() {
     return source.filter((row) => isRrePodTeam(row.team));
   }, [presetMode, snapshot?.weeklyTeamsByPreset]);
 
+  const countryOptions = useMemo<MultiSelectOption[]>(() => {
+    const codes = Array.from(
+      new Set(weeklyTeamRowsRaw.map((row) => getCountryCode(row.team)).filter(Boolean))
+    ).sort((a, b) => a.localeCompare(b));
+
+    return codes.map((code) => {
+      const meta = getCountryMeta(code);
+      return {
+        value: meta.code,
+        label: meta.label,
+        helper: `${meta.code} - ${weeklyTeamRowsRaw.filter((row) => getCountryCode(row.team) === code).length} records`,
+        tone: meta.tone,
+      };
+    });
+  }, [weeklyTeamRowsRaw]);
+
+  const podOptions = useMemo<MultiSelectOption[]>(() => {
+    const teams = Array.from(
+      new Set(
+        weeklyTeamRowsRaw
+          .map((row) => String(row.team ?? "").trim().toUpperCase())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+
+    return teams.map((team) => {
+      const meta = getCountryMeta(team);
+      return {
+        value: team,
+        label: team,
+        helper: meta.label,
+        tone: meta.tone,
+      };
+    });
+  }, [weeklyTeamRowsRaw]);
+
+  const activeCountrySelection = useMemo(
+    () => {
+      const valid = new Set(countryOptions.map((option) => option.value));
+      const base = selectedCountries ?? countryOptions.map((option) => option.value);
+      return base.filter((value) => valid.has(value));
+    },
+    [countryOptions, selectedCountries]
+  );
+  const activePodSelection = useMemo(
+    () => {
+      const valid = new Set(podOptions.map((option) => option.value));
+      const base = selectedPods ?? podOptions.map((option) => option.value);
+      return base.filter((value) => valid.has(value));
+    },
+    [podOptions, selectedPods]
+  );
+
+  const selectedCountrySet = useMemo(
+    () => new Set(activeCountrySelection),
+    [activeCountrySelection]
+  );
+  const selectedPodSet = useMemo(() => new Set(activePodSelection), [activePodSelection]);
+
   const teamRowsForTop = useMemo<TeamMemberSnapshotRow[]>(() => {
     return getRowsByPreset(snapshot?.teamMembersByPreset, presetMode).filter((row) =>
       isRrePodTeam(row.team)
     );
   }, [presetMode, snapshot?.teamMembersByPreset]);
 
+  const filteredTeamRowsForTop = useMemo<TeamMemberSnapshotRow[]>(() => {
+    return teamRowsForTop.filter((row) =>
+      groupMode === "country"
+        ? selectedCountrySet.has(getCountryCode(row.team))
+        : selectedPodSet.has(String(row.team ?? "").trim().toUpperCase())
+    );
+  }, [groupMode, selectedCountrySet, selectedPodSet, teamRowsForTop]);
+
   const topDraftRows = useMemo(
-    () => getTopPerformers(teamRowsForTop, "draft"),
-    [teamRowsForTop]
+    () => getTopPerformers(filteredTeamRowsForTop, "draft"),
+    [filteredTeamRowsForTop]
   );
   const topQaRows = useMemo(
-    () => getTopPerformers(teamRowsForTop, "qa"),
-    [teamRowsForTop]
+    () => getTopPerformers(filteredTeamRowsForTop, "qa"),
+    [filteredTeamRowsForTop]
   );
   const topDraftNames = useMemo(() => topDraftRows.map((row) => row.name), [topDraftRows]);
   const topQaNames = useMemo(() => topQaRows.map((row) => row.name), [topQaRows]);
@@ -505,19 +860,17 @@ export default function HomePage() {
       );
   }, [groupMode, weeklyTeamRowsRaw]);
 
-  const groupTotals = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const row of groupedWeeklyRows) {
-      totals.set(row.groupKey, (totals.get(row.groupKey) ?? 0) + row.draftFiles + row.qaFiles);
-    }
-    const allGroups = Array.from(totals.keys());
+  const visibleGroupKeys = useMemo(() => {
     if (groupMode === "country") {
-      return allGroups.sort((a, b) => a.localeCompare(b));
+      return countryOptions
+        .map((option) => option.value)
+        .filter((value) => selectedCountrySet.has(value));
     }
-    return allGroups
-      .sort((a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0))
-      .slice(0, 8);
-  }, [groupMode, groupedWeeklyRows]);
+
+    return podOptions
+      .map((option) => option.value)
+      .filter((value) => selectedPodSet.has(value));
+  }, [countryOptions, groupMode, podOptions, selectedCountrySet, selectedPodSet]);
 
   const weeklyKeys = useMemo(() => {
     const map = new Map<string, { weekLabel: string; firstDay: string; lastDay: string }>();
@@ -540,6 +893,16 @@ export default function HomePage() {
       .sort((a, b) => parseFirstDayToTime(a.firstDay) - parseFirstDayToTime(b.firstDay));
   }, [groupedWeeklyRows]);
 
+  const weekOptions = useMemo(
+    () =>
+      weeklyKeys.map((week) => ({
+        value: week.weekKey,
+        label: week.weekLabel,
+        helper: `${week.firstDay} - ${week.lastDay}`,
+      })),
+    [weeklyKeys]
+  );
+
   const activeWeekKey = useMemo(() => {
     if (weeklyKeys.length === 0) return null;
     if (selectedWeekKey && weeklyKeys.some((item) => item.weekKey === selectedWeekKey)) {
@@ -552,7 +915,7 @@ export default function HomePage() {
     const buildPoint = (metric: "draftRate" | "qaRate" | "qer"): MetricPoint[] => {
       const rowsByWeek = new Map<string, GroupWeekMetric[]>();
       for (const row of groupedWeeklyRows) {
-        if (!groupTotals.includes(row.groupKey)) continue;
+        if (!visibleGroupKeys.includes(row.groupKey)) continue;
         const weekRows = rowsByWeek.get(row.weekKey) ?? [];
         weekRows.push(row);
         rowsByWeek.set(row.weekKey, weekRows);
@@ -571,7 +934,7 @@ export default function HomePage() {
           lastDay: week.lastDay,
         };
         const rows = rowsByWeek.get(week.weekKey) ?? [];
-        for (const group of groupTotals) {
+        for (const group of visibleGroupKeys) {
           const found = rows.find((row) => row.groupKey === group);
           if (!found) {
             point[group] = 0;
@@ -611,7 +974,7 @@ export default function HomePage() {
       qaRate: buildPoint("qaRate"),
       qer: buildPoint("qer"),
     };
-  }, [groupTotals, groupedWeeklyRows, timeMode, weeklyKeys]);
+  }, [groupedWeeklyRows, timeMode, visibleGroupKeys, weeklyKeys]);
 
   const weekRowsByTeam = useMemo<TeamWeekAggregate[]>(() => {
     const map = new Map<
@@ -689,16 +1052,21 @@ export default function HomePage() {
   const activeWeekRowsGrouped = useMemo(() => {
     if (!activeWeekKey) return [];
     return groupedWeeklyRows
-      .filter((row) => row.weekKey === activeWeekKey && groupTotals.includes(row.groupKey))
+      .filter((row) => row.weekKey === activeWeekKey && visibleGroupKeys.includes(row.groupKey))
       .sort((a, b) => b.draftRate - a.draftRate);
-  }, [activeWeekKey, groupTotals, groupedWeeklyRows]);
+  }, [activeWeekKey, groupedWeeklyRows, visibleGroupKeys]);
 
   const activeWeekRowsByTeam = useMemo(() => {
     if (!activeWeekKey) return [];
     return weekRowsByTeam
-      .filter((row) => row.weekKey === activeWeekKey)
+      .filter((row) => {
+        if (row.weekKey !== activeWeekKey) return false;
+        return groupMode === "country"
+          ? selectedCountrySet.has(getCountryCode(row.team))
+          : selectedPodSet.has(String(row.team ?? "").trim().toUpperCase());
+      })
       .sort((a, b) => b.draftRate - a.draftRate);
-  }, [activeWeekKey, weekRowsByTeam]);
+  }, [activeWeekKey, groupMode, selectedCountrySet, selectedPodSet, weekRowsByTeam]);
 
   const previousWeekKey = useMemo(() => {
     if (!activeWeekKey) return null;
@@ -748,22 +1116,32 @@ export default function HomePage() {
     return { currentTotals, previousTotals };
   }, [activeWeekRowsGrouped, previousWeekRowsGrouped]);
 
+  const bestDraftGroup = activeWeekRowsGrouped[0] ?? null;
+  const bestQaGroup = useMemo(
+    () => [...activeWeekRowsGrouped].sort((a, b) => b.qaRate - a.qaRate)[0] ?? null,
+    [activeWeekRowsGrouped]
+  );
+  const lowestQerGroup = useMemo(
+    () => [...activeWeekRowsGrouped].sort((a, b) => a.qer - b.qer)[0] ?? null,
+    [activeWeekRowsGrouped]
+  );
+
   const selectedWeekInfo = useMemo(() => {
     if (!activeWeekKey) return null;
     return weeklyKeys.find((item) => item.weekKey === activeWeekKey) ?? null;
   }, [activeWeekKey, weeklyKeys]);
 
   const draftExtrema = useMemo(
-    () => getMetricExtrema(metricSeries.draftRate, groupTotals),
-    [groupTotals, metricSeries.draftRate]
+    () => getMetricExtrema(metricSeries.draftRate, visibleGroupKeys),
+    [metricSeries.draftRate, visibleGroupKeys]
   );
   const qaExtrema = useMemo(
-    () => getMetricExtrema(metricSeries.qaRate, groupTotals),
-    [groupTotals, metricSeries.qaRate]
+    () => getMetricExtrema(metricSeries.qaRate, visibleGroupKeys),
+    [metricSeries.qaRate, visibleGroupKeys]
   );
   const qerExtrema = useMemo(
-    () => getMetricExtrema(metricSeries.qer, groupTotals),
-    [groupTotals, metricSeries.qer]
+    () => getMetricExtrema(metricSeries.qer, visibleGroupKeys),
+    [metricSeries.qer, visibleGroupKeys]
   );
 
   function renderChart(
@@ -773,12 +1151,23 @@ export default function HomePage() {
     suffix: string,
     extrema: Map<string, Extrema>
   ) {
+    if (visibleGroupKeys.length === 0) {
+      return (
+        <ChartCard
+          title={title}
+          subtitle={`${timeMode === "weekly" ? t("Weekly mode", "Modo semanal") : t("Global cumulative mode", "Modo global acumulado")} - ${t("no visible groups", "sin grupos visibles")}`}
+        >
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+            {t("Adjust the", "Ajusta el filtro de")} {groupMode === "country" ? t("country", "paises") : t("pod", "pods")} {t("filter to visualize this series.", "para visualizar esta serie.")}
+          </div>
+        </ChartCard>
+      );
+    }
+
     return (
       <ChartCard
         title={title}
-        subtitle={`Modo ${timeMode === "weekly" ? "weekly" : "global acumulado"} - agrupado por ${
-          groupMode === "country" ? "country" : "pod"
-        }`}
+        subtitle={`${timeMode === "weekly" ? t("Weekly mode", "Modo semanal") : t("Global cumulative mode", "Modo global acumulado")} - ${t("grouped by", "agrupado por")} ${groupMode === "country" ? t("country", "pais") : t("pod", "pod")} - ${visibleGroupKeys.length} ${t("visible", "visibles")}`}
       >
         <ResponsiveContainer width="100%" height={360}>
           <LineChart
@@ -800,15 +1189,15 @@ export default function HomePage() {
                 `${formatNumber(value, decimals)}${suffix}`,
                 String(name),
               ]}
-              labelFormatter={(label) => `Semana ${label}`}
+              labelFormatter={(label) => `${t("Week", "Semana")} ${label}`}
             />
             <Legend />
-            {groupTotals.map((group, index) => (
+            {visibleGroupKeys.map((group, index) => (
               <Line
                 key={`${title}-${group}`}
                 type="monotone"
                 dataKey={group}
-                name={group}
+                name={getGroupDisplayLabel(group, groupMode)}
                 stroke={CHART_COLORS[index % CHART_COLORS.length]}
                 strokeWidth={2.6}
                 dot={(props) => {
@@ -839,7 +1228,7 @@ export default function HomePage() {
           </LineChart>
         </ResponsiveContainer>
         <p className="mt-2 text-xs text-slate-500">
-          Click sobre cualquier punto para abrir el Week Detail de esa semana.
+          {t("Click any point to open the Week Detail for that week.", "Haz clic en cualquier punto para abrir el detalle semanal.")}
         </p>
       </ChartCard>
     );
@@ -847,21 +1236,17 @@ export default function HomePage() {
 
   return (
     <div className="space-y-7">
-      <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div className="bg-[linear-gradient(110deg,#fde68a_0%,#bfdbfe_45%,#fecaca_100%)] p-[1px]">
-          <div className="rounded-[22px] bg-white/95 px-7 py-8 backdrop-blur">
-            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-              Global Intelligence
+      <section className="relative isolate overflow-visible rounded-[34px] border border-slate-200/80 bg-white shadow-[0_24px_64px_-36px_rgba(15,23,42,0.28)]">
+        <div className="rounded-[34px] bg-[linear-gradient(108deg,rgba(212,175,55,0.46)_0%,rgba(30,64,175,0.34)_48%,rgba(170,43,43,0.24)_100%)] p-[1px]">
+          <div className="rounded-[33px] bg-[linear-gradient(135deg,rgba(255,251,235,0.82)_0%,rgba(255,255,255,0.97)_28%,rgba(239,246,255,0.93)_64%,rgba(254,242,242,0.92)_100%)] px-7 py-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-xl">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
+              {t("Global Intelligence", "Inteligencia global")}
             </p>
-            <h1 className="mt-2 font-[var(--font-space-grotesk)] text-4xl font-semibold tracking-tight text-slate-900">
-              Metric Planitar Command Center
+            <h1 className="mt-3 font-[var(--font-space-grotesk)] text-4xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-5xl">
+              {t("Command Center", "Centro de mando")}
             </h1>
-            <p className="mt-3 max-w-4xl text-sm text-slate-600 sm:text-base">
-              Control ejecutivo por pais/pod con comparativos semanales, drill-down por semana y
-              top performers globales.
-            </p>
 
-            <div className="mt-6 grid gap-3 lg:grid-cols-3">
+            <div className={`mt-7 grid gap-3 ${timeMode === "weekly" ? "xl:grid-cols-5" : "xl:grid-cols-4"}`}>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                 <p className="text-[11px] uppercase tracking-[0.14em] text-slate-500">Preset</p>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -890,6 +1275,17 @@ export default function HomePage() {
                 </div>
               </div>
 
+              {timeMode === "weekly" ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <WeekSelect
+                    label={t("Active Week", "Semana activa")}
+                    value={activeWeekKey ?? ""}
+                    options={weekOptions}
+                    onChange={(value) => setSelectedWeekKey(value)}
+                  />
+                </div>
+              ) : null}
+
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                 <p className="text-[11px] uppercase tracking-[0.14em] text-slate-500">Group By</p>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -903,18 +1299,54 @@ export default function HomePage() {
                   ))}
                 </div>
               </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <MultiSelectPopover
+                  label={groupMode === "country" ? "Countries" : "Pods"}
+                  options={groupMode === "country" ? countryOptions : podOptions}
+                  selectedValues={
+                    groupMode === "country" ? activeCountrySelection : activePodSelection
+                  }
+                  onChange={(values) => {
+                    if (groupMode === "country") {
+                      setSelectedCountries(values);
+                      return;
+                    }
+                    setSelectedPods(values);
+                  }}
+                  emptyMessage={
+                    groupMode === "country"
+                      ? t("No countries are available for this preset.", "No hay paises disponibles para este preset.")
+                      : t("No pods are available for this preset.", "No hay pods disponibles para este preset.")
+                  }
+                />
+              </div>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-500">
               <span className="rounded-full bg-slate-100 px-3 py-1">
-                Preset activo: {selectedPreset.label}
+                {t("Active preset", "Preset activo")}: {selectedPreset.label}
               </span>
+              <span className="rounded-full bg-slate-100 px-3 py-1">
+                {t("Time mode", "Modo de tiempo")}:{" "}
+                {timeMode === "weekly" ? t("Weekly", "Semanal") : t("Global", "Global")}
+              </span>
+              {timeMode === "weekly" && selectedWeekInfo ? (
+                <span className="rounded-full bg-slate-100 px-3 py-1">
+                  {t("Active week", "Semana activa")}: {selectedWeekInfo.weekLabel} - {selectedWeekInfo.firstDay} - {selectedWeekInfo.lastDay}
+                </span>
+              ) : null}
               <span className="rounded-full bg-slate-100 px-3 py-1">{selectedPreset.description}</span>
               <span className="rounded-full bg-slate-100 px-3 py-1">
-                Ultima actualizacion:{" "}
+                {groupMode === "country"
+                  ? `${activeCountrySelection.length} ${t("visible countries", "paises visibles")}`
+                  : `${activePodSelection.length} ${t("visible pods", "pods visibles")}`}
+              </span>
+              <span className="rounded-full bg-slate-100 px-3 py-1">
+                {t("Last updated", "Ultima actualizacion")}:{" "}
                 {snapshot?.generatedAt
-                  ? new Date(snapshot.generatedAt).toLocaleString("es-CO")
-                  : "Sin datos"}
+                  ? new Date(snapshot.generatedAt).toLocaleString(locale)
+                  : t("No data", "Sin datos")}
               </span>
             </div>
           </div>
@@ -926,7 +1358,7 @@ export default function HomePage() {
       {snapshot && weeklyTeamRowsRaw.length === 0 && (
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <p className="text-sm text-slate-600">
-            No hay datos para el preset seleccionado en pods RRE.
+            {t("No data is available for the selected preset in RRE pods.", "No hay datos para el preset seleccionado en pods RRE.")}
           </p>
         </section>
       )}
@@ -935,14 +1367,14 @@ export default function HomePage() {
         <>
           <section className="grid gap-4 xl:grid-cols-2">
             <TopThreeCard
-              title={`Top 3 Draft (${timeMode === "weekly" ? "semana activa" : "global"})`}
-              metricLabel="Velocidad"
+              title={`Top 3 Draft (${timeMode === "weekly" ? t("active week", "semana activa") : t("global", "global")})`}
+              metricLabel={t("Speed", "Velocidad")}
               tone="blue"
               rows={topDraftRows}
             />
             <TopThreeCard
-              title={`Top 3 QA (${timeMode === "weekly" ? "semana activa" : "global"})`}
-              metricLabel="Velocidad"
+              title={`Top 3 QA (${timeMode === "weekly" ? t("active week", "semana activa") : t("global", "global")})`}
+              metricLabel={t("Speed", "Velocidad")}
               tone="emerald"
               rows={topQaRows}
             />
@@ -951,37 +1383,37 @@ export default function HomePage() {
           <section className="hidden">
             <MetricCard
               title="Top 3 Draft (Global)"
-              value={topDraftNames.join(" • ") || "-"}
-              helper="Solo nombres"
-              tooltip="Ranking global por Draft Rate"
+              value={topDraftNames.join(" | ") || "-"}
+              helper={t("Names only", "Solo nombres")}
+              tooltip={t("Global ranking by Draft Rate", "Ranking global por Draft Rate")}
             />
             <MetricCard
               title="Top 3 QA (Global)"
-              value={topQaNames.join(" • ") || "-"}
-              helper="Solo nombres"
-              tooltip="Ranking global por QA Rate"
+              value={topQaNames.join(" | ") || "-"}
+              helper={t("Names only", "Solo nombres")}
+              tooltip={t("Global ranking by QA Rate", "Ranking global por QA Rate")}
             />
             <MetricCard
-              title="Semanas disponibles"
+              title={t("Available weeks", "Semanas disponibles")}
               value={String(weeklyKeys.length)}
-              helper="Usa click en chart para drill-down semanal"
+              helper={t("Use chart clicks for weekly drill-down.", "Usa click en chart para drill-down semanal")}
             />
             <MetricCard
-              title="Grupos activos"
-              value={String(groupTotals.length)}
+              title={t("Active groups", "Grupos activos")}
+              value={String(visibleGroupKeys.length)}
               helper={groupMode === "country" ? "Countries" : "Pods"}
             />
           </section>
 
           <section className="grid gap-4 md:grid-cols-2">
             <MetricCard
-              title="Semanas disponibles"
+              title={t("Available weeks", "Semanas disponibles")}
               value={String(weeklyKeys.length)}
-              helper="Usa click en chart para drill-down semanal"
+              helper={t("Use chart clicks for weekly drill-down.", "Usa click en chart para drill-down semanal")}
             />
             <MetricCard
-              title="Grupos activos"
-              value={String(groupTotals.length)}
+              title={t("Active groups", "Grupos activos")}
+              value={String(visibleGroupKeys.length)}
               helper={groupMode === "country" ? "Countries" : "Pods"}
             />
           </section>
@@ -1007,7 +1439,7 @@ export default function HomePage() {
                   onClick={() => setSelectedWeekKey(null)}
                   className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
                 >
-                  Volver a ultima semana
+                  {t("Return to latest week", "Volver a la ultima semana")}
                 </button>
               </div>
 
@@ -1072,8 +1504,8 @@ export default function HomePage() {
 
               <div className="mt-6 grid gap-4 xl:grid-cols-2">
                 <ChartCard
-                  title="Comparacion por grupo"
-                  subtitle="Draft / QA / QER del week seleccionado"
+                  title={t("Group comparison", "Comparacion por grupo")}
+                  subtitle={t("Draft / QA / QER for the selected week", "Draft / QA / QER del week seleccionado")}
                 >
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={activeWeekRowsGrouped} margin={{ top: 6, right: 8, left: 0, bottom: 8 }}>
@@ -1090,8 +1522,8 @@ export default function HomePage() {
                 </ChartCard>
 
                 <ChartCard
-                  title="Volume de la semana"
-                  subtitle="Files por grupo"
+                  title={t("Week volume", "Volumen de la semana")}
+                  subtitle={t("Files by group", "Files por grupo")}
                 >
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={activeWeekRowsGrouped} margin={{ top: 6, right: 8, left: 0, bottom: 8 }}>
@@ -1108,29 +1540,53 @@ export default function HomePage() {
               </div>
 
               <div className="mt-6 grid gap-4 xl:grid-cols-2">
-                <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <section className="rounded-3xl border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.96)_0%,rgba(255,255,255,0.98)_100%)] p-5 shadow-sm">
                   <h3 className="font-[var(--font-space-grotesk)] text-lg font-semibold text-slate-900">
                     Weekly ranking by team
                   </h3>
-                  <div className="mt-3 overflow-x-auto">
+                  <p className="mt-1 text-sm text-slate-500">
+                    {t("Executive view of the selected week with a visual country reference for each pod.", "Vista ejecutiva del week seleccionado con referencia visual de pais por pod.")}
+                  </p>
+                  <div className="mt-4 overflow-x-auto">
                     <table className="min-w-full text-sm">
                       <thead>
-                        <tr className="border-b border-slate-200 text-left text-slate-500">
-                          <th className="py-2 pr-3">Team</th>
-                          <th className="py-2 pr-3">Draft</th>
-                          <th className="py-2 pr-3">QA</th>
-                          <th className="py-2 pr-3">QER</th>
-                          <th className="py-2 pr-3">Files D/QA</th>
+                        <tr className="border-b border-slate-200 text-left text-[11px] uppercase tracking-[0.14em] text-slate-500">
+                          <th className="py-3 pr-3 font-semibold">Team</th>
+                          <th className="py-3 pr-3 font-semibold">Draft</th>
+                          <th className="py-3 pr-3 font-semibold">QA</th>
+                          <th className="py-3 pr-3 font-semibold">QER</th>
+                          <th className="py-3 pr-3 font-semibold">Files D/QA</th>
                         </tr>
                       </thead>
                       <tbody>
                         {activeWeekRowsByTeam.slice(0, 12).map((row) => (
-                          <tr key={`wk-team-${row.weekKey}-${row.team}`} className="border-b border-slate-100">
-                            <td className="py-2 pr-3 font-semibold text-slate-900">{row.team}</td>
-                            <td className="py-2 pr-3">{formatNumber(row.draftRate, 0)}</td>
-                            <td className="py-2 pr-3">{formatNumber(row.qaRate, 0)}</td>
-                            <td className="py-2 pr-3">{formatNumber(row.qer, 1)}%</td>
-                            <td className="py-2 pr-3">
+                          <tr
+                            key={`wk-team-${row.weekKey}-${row.team}`}
+                            className="group border-b border-slate-100 transition hover:bg-slate-50/80"
+                          >
+                            <td className="py-3 pr-3">
+                              <div className="flex items-center gap-3">
+                                <CountryBadge teamOrCode={row.team} compact />
+                                <div>
+                                  <p className="font-semibold text-slate-900">{row.team}</p>
+                                  <p className="text-xs text-slate-500">
+                                    {getCountryMeta(row.team).label}
+                                  </p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3 pr-3 font-medium text-slate-800">
+                              {formatNumber(row.draftRate, 0)}
+                            </td>
+                            <td className="py-3 pr-3 font-medium text-slate-800">
+                              {formatNumber(row.qaRate, 0)}
+                            </td>
+                            <td className="py-3 pr-3">
+                              <span className="inline-flex rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 ring-1 ring-rose-200">
+                                {formatNumber(row.qer, 1)}%
+                              </span>
+                            </td>
+                            <td className="py-3 pr-3 text-slate-600">
                               {formatNumber(row.draftFiles, 0)} / {formatNumber(row.qaFiles, 0)}
                             </td>
                           </tr>
@@ -1140,51 +1596,70 @@ export default function HomePage() {
                   </div>
                 </section>
 
-                <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <section className="rounded-3xl border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.96)_0%,rgba(255,255,255,0.98)_100%)] p-5 shadow-sm">
                   <h3 className="font-[var(--font-space-grotesk)] text-lg font-semibold text-slate-900">
-                    Highlights del week
+                    {t("Week highlights", "Highlights del week")}
                   </h3>
-                  <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                    {activeWeekRowsGrouped.length > 0 ? (
+                  <p className="mt-1 text-sm text-slate-500">
+                    {t("Quick performance summary for the visible week.", "Resumen rapido de desempeno para la semana visible.")}
+                  </p>
+                  <div className="mt-4 grid gap-3">
+                    {bestDraftGroup && bestQaGroup && lowestQerGroup ? (
                       <>
-                        <li className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
-                          Mejor Draft:{" "}
-                          <span className="font-semibold text-slate-900">
-                            {activeWeekRowsGrouped[0].groupKey}
-                          </span>{" "}
-                          ({formatNumber(activeWeekRowsGrouped[0].draftRate, 0)})
-                        </li>
-                        <li className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
-                          Mejor QA:{" "}
-                          <span className="font-semibold text-slate-900">
-                            {[...activeWeekRowsGrouped].sort((a, b) => b.qaRate - a.qaRate)[0]
-                              ?.groupKey ?? "-"}
-                          </span>
-                        </li>
-                        <li className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
-                          Menor QER:{" "}
-                          <span className="font-semibold text-slate-900">
-                            {[...activeWeekRowsGrouped].sort((a, b) => a.qer - b.qer)[0]
-                              ?.groupKey ?? "-"}
-                          </span>
-                        </li>
-                        <li className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
-                          Variacion Draft vs prev:{" "}
-                          <span className="font-semibold text-slate-900">
-                            {formatNumber(
-                              weekSummary.currentTotals.draftRate -
-                                weekSummary.previousTotals.draftRate,
-                              0
-                            )}
-                          </span>
-                        </li>
+                        <article className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                {t("Best Draft", "Mejor Draft")}
+                              </p>
+                              <p className="mt-1 text-base font-semibold text-slate-900">
+                                {getGroupDisplayLabel(bestDraftGroup.groupKey, groupMode)}
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-200">
+                              {formatNumber(bestDraftGroup.draftRate, 0)}
+                            </span>
+                          </div>
+                        </article>
+
+                        <article className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                {t("Best QA", "Mejor QA")}
+                              </p>
+                              <p className="mt-1 text-base font-semibold text-slate-900">
+                                {getGroupDisplayLabel(bestQaGroup.groupKey, groupMode)}
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                              {formatNumber(bestQaGroup.qaRate, 0)}
+                            </span>
+                          </div>
+                        </article>
+
+                        <article className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                {t("Lowest QER", "Menor QER")}
+                              </p>
+                              <p className="mt-1 text-base font-semibold text-slate-900">
+                                {getGroupDisplayLabel(lowestQerGroup.groupKey, groupMode)}
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700 ring-1 ring-rose-200">
+                              {formatNumber(lowestQerGroup.qer, 1)}%
+                            </span>
+                          </div>
+                        </article>
                       </>
                     ) : (
-                      <li className="rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
-                        Sin highlights para esta semana.
-                      </li>
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                        {t("No highlights for this week.", "Sin highlights para esta semana.")}
+                      </div>
                     )}
-                  </ul>
+                  </div>
                 </section>
               </div>
             </section>

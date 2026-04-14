@@ -22,6 +22,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useAppLanguage } from "@/lib/i18n/app-language";
 import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
 import type {
   SnapshotPresetMode,
@@ -29,7 +30,12 @@ import type {
 } from "@/lib/store/dashboard-snapshot";
 import { readPersistedUploadBatches } from "@/lib/store/upload-batches";
 import { parseNumber } from "@/lib/format/number";
-import { getField, normalizeValue } from "@/lib/csv/row-helpers";
+import {
+  getField,
+  getStrictFieldByAliases,
+  looksLikeDateOrTimestamp,
+  normalizeValue,
+} from "@/lib/csv/row-helpers";
 import {
   COL_DRAFTER_NAME,
   COL_DRAFTER_TEAM,
@@ -110,8 +116,13 @@ type FileAlertRow = {
   id: string;
   fileName: string;
   team: string;
+  weekKey: string;
+  weekLabel: string;
+  firstDay: string;
+  lastDay: string;
   drafter: string;
   qa: string;
+  people: string[];
   issue: string;
   value: string;
   severity: "high" | "medium";
@@ -157,6 +168,8 @@ const normalizeName = (value: string) =>
     .trim()
     .toLowerCase();
 
+const formatLevelLabel = (level: string) => (level === "Intermedio" ? "Intermediate" : level);
+
 const toSafeNumber = (value: unknown) => {
   const numeric = typeof value === "number" ? value : Number(value ?? 0);
   return Number.isFinite(numeric) ? numeric : 0;
@@ -179,6 +192,117 @@ function parseFirstDayToTime(value: string) {
   }
   const parsed = Date.parse(raw);
   return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+}
+
+function getSortableDayTime(value: string) {
+  const parsed = parseFirstDayToTime(value);
+  return parsed === Number.MAX_SAFE_INTEGER ? -1 : parsed;
+}
+
+function parseDateCandidate(value?: string) {
+  const token = normalizeValue(value);
+  if (!token) return null;
+
+  const iso = token.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  const dmy = token.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (dmy) {
+    const date = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  const parsed = Date.parse(token.replace(",", " "));
+  if (Number.isNaN(parsed)) return null;
+
+  const parsedDate = new Date(parsed);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+}
+
+function getMonday(date: Date) {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  const diff = copy.getDay() === 0 ? -6 : 1 - copy.getDay();
+  copy.setDate(copy.getDate() + diff);
+  return copy;
+}
+
+function getSunday(date: Date) {
+  const monday = getMonday(date);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return sunday;
+}
+
+function formatDateLabel(date: Date) {
+  return date.toLocaleDateString("es-CO");
+}
+
+function getISOWeek(date: Date) {
+  const tmp = new Date(date.getTime());
+  tmp.setHours(0, 0, 0, 0);
+  tmp.setDate(tmp.getDate() + 3 - ((tmp.getDay() + 6) % 7));
+  const week1 = new Date(tmp.getFullYear(), 0, 4);
+  return (
+    1 +
+    Math.round(
+      ((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7
+    )
+  );
+}
+
+function getWeekInfoFromRow(row: CsvRow) {
+  const candidates: string[] = [];
+  const pushCandidate = (value?: string) => {
+    const normalized = normalizeValue(value);
+    if (normalized) candidates.push(normalized);
+  };
+
+  pushCandidate(
+    getField(row, [
+      "Publish Date",
+      "PublishDate",
+      "Date",
+      "Publish date",
+      "Completed Date",
+      "CompletedDate",
+    ])
+  );
+
+  for (const [key, value] of Object.entries(row)) {
+    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (
+      (normalizedKey.includes("publishdate") ||
+        normalizedKey === "date" ||
+        normalizedKey.includes("completeddate")) &&
+      looksLikeDateOrTimestamp(value)
+    ) {
+      pushCandidate(value);
+    }
+  }
+
+  for (const candidate of candidates) {
+    const date = parseDateCandidate(candidate);
+    if (!date) continue;
+    const monday = getMonday(date);
+    const sunday = getSunday(date);
+    return {
+      weekKey: monday.toISOString().slice(0, 10),
+      weekLabel: `Week ${getISOWeek(date)}`,
+      firstDay: formatDateLabel(monday),
+      lastDay: formatDateLabel(sunday),
+    };
+  }
+
+  return {
+    weekKey: "unassigned",
+    weekLabel: "No week",
+    firstDay: "-",
+    lastDay: "-",
+  };
 }
 
 export default function TeamsPage() {
@@ -286,9 +410,44 @@ function getTeamFromCsvRow(row: CsvRow) {
 }
 
 function getFileNameFromCsvRow(row: CsvRow) {
-  return normalizeValue(
-    getField(row, ["File", "File Name", "Filename", "file", "file_name"])
+  const strictMatch = normalizeValue(
+    getStrictFieldByAliases(row, ["File", "File Name", "Filename", "URL", "Link"])
   );
+  if (strictMatch) return strictMatch;
+
+  const fallback = normalizeValue(
+    getField(row, ["File", "File Name", "Filename", "URL", "Link", "file", "file_name"])
+  );
+
+  if (fallback && !looksLikeDateOrTimestamp(fallback)) {
+    return fallback;
+  }
+
+  const rowValues = Object.entries(row).map(([key, value]) => ({
+    key,
+    value: normalizeValue(value),
+    normalizedKey: key.toLowerCase().replace(/[^a-z0-9]/g, ""),
+  }));
+
+  const urlCandidate = rowValues.find(
+    (entry) =>
+      entry.value &&
+      /^https?:\/\//i.test(entry.value) &&
+      (entry.normalizedKey.includes("file") ||
+        entry.normalizedKey.includes("url") ||
+        entry.normalizedKey.includes("link"))
+  );
+  if (urlCandidate) return urlCandidate.value;
+
+  const anyGuideUrl = rowValues.find(
+    (entry) =>
+      entry.value &&
+      /^https?:\/\//i.test(entry.value) &&
+      /youriguide|iguides|manage\./i.test(entry.value)
+  );
+  if (anyGuideUrl) return anyGuideUrl.value;
+
+  return "";
 }
 
 function getMetricToneClass(tone: MetricTone) {
@@ -348,36 +507,6 @@ function ChevronDownIcon({ className = "h-4 w-4" }: { className?: string }) {
     <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
       <path d="m5 7 5 6 5-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
-  );
-}
-
-function DeltaPill({
-  current,
-  previous,
-  decimals,
-  suffix = "",
-  invert = false,
-}: {
-  current: number;
-  previous: number | null;
-  decimals: number;
-  suffix?: string;
-  invert?: boolean;
-}) {
-  if (previous === null) {
-    return <span className="text-xs text-slate-400">Sin referencia</span>;
-  }
-  const delta = current - previous;
-  const improved = invert ? delta < 0 : delta > 0;
-  const same = Math.abs(delta) < 0.001;
-  const tone = same ? "text-slate-500" : improved ? "text-emerald-600" : "text-rose-600";
-  const symbol = same ? "=" : delta > 0 ? "+" : "";
-  return (
-    <span className={`text-xs font-semibold ${tone}`}>
-      {symbol}
-      {formatNumber(delta, decimals)}
-      {suffix} vs prev
-    </span>
   );
 }
 
@@ -455,10 +584,74 @@ function ChartCard({
   );
 }
 
+function FilterField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+      <p className="text-[11px] uppercase tracking-[0.14em] text-slate-500">{label}</p>
+      <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <article className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
+      <p className="text-[11px] uppercase tracking-[0.14em] text-slate-500">{label}</p>
+      <p className="mt-1 font-[var(--font-space-grotesk)] text-2xl font-semibold text-slate-900">
+        {value}
+      </p>
+      <p className="mt-1 text-xs text-slate-500">{helper}</p>
+    </article>
+  );
+}
+
+function WeeklyDetailMetricCard({
+  title,
+  value,
+  helper,
+}: {
+  title: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <article className="rounded-2xl border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.9)_0%,rgba(255,255,255,1)_100%)] p-4 shadow-sm">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+        {title}
+      </p>
+      <p className="mt-2 font-[var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-slate-900">
+        {value}
+      </p>
+      <p className="mt-2 text-sm text-slate-500">{helper}</p>
+    </article>
+  );
+}
+
+function isUrl(value: string) {
+  return /^https?:\/\//i.test(String(value ?? "").trim());
+}
+
 function TeamsPageContent() {
+  const { language, locale } = useAppLanguage();
   const router = useRouter();
   const searchParams = useSearchParams();
   const snapshot = useDashboardSnapshot();
+  const isSpanish = language === "es";
+  const t = (en: string, es: string) => (isSpanish ? es : en);
   const personConfig = usePersonConfigStore();
   const [selectedPreset, setSelectedPreset] = useState<SnapshotPresetMode>("combined");
   const [selectedTeam, setSelectedTeam] = useState<TeamFilter>("all");
@@ -477,7 +670,11 @@ function TeamsPageContent() {
   });
   const [uploadRows, setUploadRows] = useState<CsvRow[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(true);
+  const [selectedAlertTeam, setSelectedAlertTeam] = useState<TeamFilter>("all");
   const [focusedFile, setFocusedFile] = useState("");
+  const [alertPersonFilter, setAlertPersonFilter] = useState("");
+  const [alertWeekFilter, setAlertWeekFilter] = useState("all");
+  const [selectedAlertFileName, setSelectedAlertFileName] = useState("");
   const [functionsEditorRow, setFunctionsEditorRow] = useState<MemberViewRow | null>(null);
 
   const teamOptions = useMemo(() => {
@@ -505,6 +702,7 @@ function TeamsPageContent() {
     const fileParam = decodeURIComponent(searchParams.get("file") ?? "").trim();
     if (fileParam) {
       setFocusedFile(fileParam);
+      setSelectedAlertFileName(fileParam);
     }
   }, [searchParams, teamOptions]);
 
@@ -513,6 +711,20 @@ function TeamsPageContent() {
       setSelectedTeam("all");
     }
   }, [selectedTeam, teamOptions]);
+
+  useEffect(() => {
+    setSelectedAlertTeam(selectedTeam);
+  }, [selectedTeam]);
+
+  useEffect(() => {
+    if (
+      selectedAlertTeam !== "all" &&
+      teamOptions.length > 0 &&
+      !teamOptions.includes(selectedAlertTeam)
+    ) {
+      setSelectedAlertTeam(selectedTeam === "all" ? "all" : selectedTeam);
+    }
+  }, [selectedAlertTeam, selectedTeam, teamOptions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -546,6 +758,7 @@ function TeamsPageContent() {
   }, [personConfig]);
 
   const teamFilter = selectedTeam === "all" ? null : selectedTeam;
+  const alertTeamFilter = selectedAlertTeam === "all" ? null : selectedAlertTeam;
   const leaderTeams = useMemo(() => {
     const teams = Object.keys(TEAM_LEADERS).filter((team) =>
       teamOptions.includes(team)
@@ -891,13 +1104,17 @@ function TeamsPageContent() {
   const topQaRows = useMemo(() => qaRows.slice(0, 3), [qaRows]);
 
   const fileAlerts = useMemo<FileAlertRow[]>(() => {
-    if (!teamFilter) return [];
+    if (!alertTeamFilter) return [];
     const rows = uploadRows;
     if (rows.length === 0) return [];
 
     type Aggregated = {
       fileName: string;
       team: string;
+      weekKey: string;
+      weekLabel: string;
+      firstDay: string;
+      lastDay: string;
       drafters: Set<string>;
       qas: Set<string>;
       maxDraftHours: number;
@@ -913,15 +1130,22 @@ function TeamsPageContent() {
     for (const row of rows) {
       if (!matchesPreset(row, selectedPreset as PresetMode)) continue;
       const rowTeam = getTeamFromCsvRow(row);
-      if (rowTeam !== teamFilter) continue;
+      if (!isRrePodTeam(rowTeam)) continue;
+      if (alertTeamFilter && rowTeam !== alertTeamFilter) continue;
 
       const fileName = getFileNameFromCsvRow(row);
       if (!fileName) continue;
+      const weekInfo = getWeekInfoFromRow(row);
+      const aggregationKey = `${fileName}|||${weekInfo.weekKey}`;
 
-      if (!byFile.has(fileName)) {
-        byFile.set(fileName, {
+      if (!byFile.has(aggregationKey)) {
+        byFile.set(aggregationKey, {
           fileName,
           team: rowTeam,
+          weekKey: weekInfo.weekKey,
+          weekLabel: weekInfo.weekLabel,
+          firstDay: weekInfo.firstDay,
+          lastDay: weekInfo.lastDay,
           drafters: new Set<string>(),
           qas: new Set<string>(),
           maxDraftHours: 0,
@@ -934,7 +1158,7 @@ function TeamsPageContent() {
         });
       }
 
-      const current = byFile.get(fileName)!;
+      const current = byFile.get(aggregationKey)!;
       const drafter = normalizeValue(getField(row, COL_DRAFTER_NAME));
       const qa = normalizeValue(getField(row, COL_QA_NAME));
       if (drafter) current.drafters.add(drafter);
@@ -968,15 +1192,23 @@ function TeamsPageContent() {
     for (const entry of byFile.values()) {
       const drafter = Array.from(entry.drafters).join(", ") || "-";
       const qa = Array.from(entry.qas).join(", ") || "-";
+      const people = Array.from(new Set([...entry.drafters, ...entry.qas])).sort((a, b) =>
+        a.localeCompare(b)
+      );
 
       if (entry.maxDraftHours > 5 || entry.maxQaHours > 5) {
         alerts.push({
           id: `${entry.fileName}-duration`,
           fileName: entry.fileName,
           team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
           drafter,
           qa,
-          issue: "Duracion > 5h",
+          people,
+          issue: "Duration > 5h",
           value: `Draft ${formatNumber(entry.maxDraftHours, 2)}h / QA ${formatNumber(entry.maxQaHours, 2)}h`,
           severity: "high",
         });
@@ -987,8 +1219,13 @@ function TeamsPageContent() {
           id: `${entry.fileName}-errors`,
           fileName: entry.fileName,
           team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
           drafter,
           qa,
+          people,
           issue: "Errores excesivos",
           value: `${formatNumber(entry.totalErrors, 0)} errores`,
           severity: entry.totalErrors >= 14 ? "high" : "medium",
@@ -1000,9 +1237,14 @@ function TeamsPageContent() {
           id: `${entry.fileName}-size`,
           fileName: entry.fileName,
           team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
           drafter,
           qa,
-          issue: "Tamano anomalo",
+          people,
+          issue: "Abnormal size",
           value: `min ${formatNumber(entry.minSqft === Number.MAX_SAFE_INTEGER ? 0 : entry.minSqft, 0)} / max ${formatNumber(entry.maxSqft, 0)} sqft`,
           severity: "medium",
         });
@@ -1013,9 +1255,14 @@ function TeamsPageContent() {
           id: `${entry.fileName}-multi-drafter`,
           fileName: entry.fileName,
           team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
           drafter,
           qa,
-          issue: "Multiples drafters",
+          people,
+          issue: "Multiple drafters",
           value: `${entry.drafters.size} drafters`,
           severity: "high",
         });
@@ -1029,9 +1276,14 @@ function TeamsPageContent() {
           id: `${entry.fileName}-qa-abnormal`,
           fileName: entry.fileName,
           team: entry.team,
+          weekKey: entry.weekKey,
+          weekLabel: entry.weekLabel,
+          firstDay: entry.firstDay,
+          lastDay: entry.lastDay,
           drafter,
           qa,
-          issue: "QA anomalo",
+          people,
+          issue: "Abnormal QA",
           value: `min ${formatNumber(entry.minQaRate === Number.MAX_SAFE_INTEGER ? 0 : entry.minQaRate, 0)} / max ${formatNumber(entry.maxQaRate, 0)}`,
           severity: "high",
         });
@@ -1041,10 +1293,96 @@ function TeamsPageContent() {
     return alerts
       .sort((a, b) => {
         if (a.severity !== b.severity) return a.severity === "high" ? -1 : 1;
+        const weekDelta = getSortableDayTime(b.firstDay) - getSortableDayTime(a.firstDay);
+        if (weekDelta !== 0) return weekDelta;
         return a.fileName.localeCompare(b.fileName);
-      })
-      .slice(0, 120);
-  }, [selectedPreset, teamFilter, uploadRows]);
+      });
+  }, [alertTeamFilter, selectedPreset, uploadRows]);
+
+  const alertPersonOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const alert of fileAlerts) {
+      for (const person of alert.people) {
+        if (person) names.add(person);
+      }
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [fileAlerts]);
+
+  const alertWeekOptions = useMemo(() => {
+    const weeks = new Map<
+      string,
+      { value: string; label: string; helper: string; sortTime: number; count: number }
+    >();
+
+    for (const alert of fileAlerts) {
+      if (!weeks.has(alert.weekKey)) {
+        weeks.set(alert.weekKey, {
+          value: alert.weekKey,
+          label: alert.weekLabel,
+          helper:
+            alert.firstDay !== "-" && alert.lastDay !== "-"
+              ? `${alert.firstDay} - ${alert.lastDay}`
+              : "No range detected",
+          sortTime: getSortableDayTime(alert.firstDay),
+          count: 0,
+        });
+      }
+      weeks.get(alert.weekKey)!.count += 1;
+    }
+
+    return Array.from(weeks.values())
+      .sort((a, b) => b.sortTime - a.sortTime || a.label.localeCompare(b.label))
+      .map((item) => ({
+        ...item,
+        helper: `${item.helper} · ${item.count} alerts`,
+      }));
+  }, [fileAlerts]);
+
+  const filteredFileAlerts = useMemo(() => {
+    const normalizedFileFilter = focusedFile.trim().toLowerCase();
+    const normalizedPersonFilter = normalizeName(alertPersonFilter);
+
+    return fileAlerts.filter((alert) => {
+      if (alertWeekFilter !== "all" && alert.weekKey !== alertWeekFilter) return false;
+      if (
+        normalizedFileFilter &&
+        !normalizeValue(alert.fileName).toLowerCase().includes(normalizedFileFilter)
+      ) {
+        return false;
+      }
+      if (
+        normalizedPersonFilter &&
+        !alert.people.some((person) => normalizeName(person).includes(normalizedPersonFilter))
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [alertPersonFilter, alertWeekFilter, fileAlerts, focusedFile]);
+
+  useEffect(() => {
+    if (
+      alertWeekFilter !== "all" &&
+      !alertWeekOptions.some((option) => option.value === alertWeekFilter)
+    ) {
+      setAlertWeekFilter("all");
+    }
+  }, [alertWeekFilter, alertWeekOptions]);
+
+  useEffect(() => {
+    setAlertPersonFilter("");
+    setAlertWeekFilter("all");
+    setFocusedFile("");
+    setSelectedAlertFileName("");
+  }, [selectedAlertTeam]);
+
+  useEffect(() => {
+    if (!selectedAlertFileName) return;
+    if (!filteredFileAlerts.some((alert) => alert.fileName === selectedAlertFileName)) {
+      setSelectedAlertFileName("");
+    }
+  }, [filteredFileAlerts, selectedAlertFileName]);
 
   const averageDraftTarget = useMemo(() => {
     if (drafterRows.length === 0) return 2500;
@@ -1109,12 +1447,6 @@ function TeamsPageContent() {
         : weeklyRows.find((row) => getWeekKey(row) === historyActiveWeekKey) ?? null,
     [historyActiveWeekKey, weeklyRows]
   );
-  const historyPreviousWeekRow = useMemo(() => {
-    if (!historyActiveWeekKey) return null;
-    const index = weeklyRows.findIndex((row) => getWeekKey(row) === historyActiveWeekKey);
-    return index > 0 ? weeklyRows[index - 1] ?? null : null;
-  }, [historyActiveWeekKey, weeklyRows]);
-
   const historyWeekMembers = useMemo(
     () =>
       !historyActiveWeekKey
@@ -1153,15 +1485,15 @@ function TeamsPageContent() {
     if (!historyWeekRow) return [];
     const insights: string[] = [];
     if (historyWeekRow.qer > 18)
-      insights.push("Alerta: QER semanal por encima del rango recomendado.");
+    insights.push("Alert: Weekly QER is above the recommended range.");
     if (historyWeekRow.draftRate >= averageDraftTarget)
-      insights.push("Fortaleza: Draft Rate semanal en o sobre meta.");
+    insights.push("Strength: Weekly Draft Rate is at or above target.");
     if (historyWeekRow.qaRate < QA_TARGET_MIN)
-      insights.push("Atencion: QA Rate semanal por debajo del target base.");
+    insights.push("Attention: Weekly QA Rate is below the base target.");
     if (historyWeekDrafters.length === 0)
-      insights.push("No hay drafters con horas registradas en esta semana.");
+    insights.push("No drafters have registered hours in this week.");
     if (historyWeekQa.length === 0)
-      insights.push("No hay QA con horas registradas en esta semana.");
+    insights.push("No QA members have registered hours in this week.");
     return insights;
   }, [averageDraftTarget, historyWeekDrafters.length, historyWeekQa.length, historyWeekRow]);
 
@@ -1174,6 +1506,11 @@ function TeamsPageContent() {
       return config.functions;
     }
     return getDefaultPersonConfig(row).functions;
+  }
+
+  function getLevelForRow(row: MemberViewRow): Level {
+    const config = personConfigByNormalizedName.get(normalizeName(row.name));
+    return config?.level ?? getDefaultPersonConfig(row).level;
   }
 
   function togglePersonFunction(row: MemberViewRow, fn: PersonFunction) {
@@ -1191,6 +1528,19 @@ function TeamsPageContent() {
       [row.name]: {
         ...existing,
         functions: Array.from(new Set(nextFunctions)),
+      },
+    };
+    writePersonConfig(next);
+  }
+
+  function updatePersonLevel(row: MemberViewRow, level: Level) {
+    const current = readPersonConfig();
+    const existing = current[row.name] ?? getDefaultPersonConfig(row);
+    const next: Record<string, PersonConfig> = {
+      ...current,
+      [row.name]: {
+        ...existing,
+        level,
       },
     };
     writePersonConfig(next);
@@ -1217,15 +1567,11 @@ function TeamsPageContent() {
         <div className="bg-[linear-gradient(110deg,#fde68a_0%,#bfdbfe_45%,#fecaca_100%)] p-[1px]">
           <div className="rounded-[22px] bg-white/95 px-7 py-8 backdrop-blur">
             <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-              Teams Intelligence
+              {t("Teams Intelligence", "Inteligencia de equipos")}
             </p>
             <h1 className="mt-2 font-[var(--font-space-grotesk)] text-4xl font-semibold tracking-tight text-slate-900">
-              Comparativas operativas por equipo
+              {t("Team operational comparisons", "Comparativos operativos por equipo")}
             </h1>
-            <p className="mt-3 max-w-4xl text-sm text-slate-600 sm:text-base">
-              Vista gerencial para pods RRE por pais, con velocidad, calidad y carga operativa.
-              Las tablas son ordenables y cada persona abre su perfil individual.
-            </p>
 
             <div className="mt-6 grid gap-3 xl:grid-cols-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 xl:col-span-4">
@@ -1252,7 +1598,7 @@ function TeamsPageContent() {
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 xl:col-span-2">
-                <p className="text-[11px] uppercase tracking-[0.14em] text-slate-500">Equipo</p>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-slate-500">Team</p>
                 <div className="relative mt-2">
                   <select
                     value={selectedTeam}
@@ -1260,7 +1606,7 @@ function TeamsPageContent() {
                     className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500"
                   >
                     <option value="all">
-                      Todos los equipos ({teamOptions.length} pods RRE)
+                      All teams ({teamOptions.length} RRE pods)
                     </option>
                     {teamOptions.map((team) => (
                       <option key={`team-option-${team}`} value={team}>
@@ -1284,8 +1630,8 @@ function TeamsPageContent() {
                     }
                     className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500"
                   >
-                    <option value="weekly">Semanal (1 semana)</option>
-                    <option value="global">Global (acumulado)</option>
+                    <option value="weekly">Weekly (1 week)</option>
+                    <option value="global">Global (cumulative)</option>
                   </select>
                   <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
                     <ChevronDownIcon />
@@ -1295,7 +1641,7 @@ function TeamsPageContent() {
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                 <p className="text-[11px] uppercase tracking-[0.14em] text-slate-500">
-                  Semana Activa
+                  Active week
                 </p>
                 {selectedRankingMode === "weekly" ? (
                   <div className="relative mt-2">
@@ -1305,7 +1651,7 @@ function TeamsPageContent() {
                       className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500"
                     >
                       <option value="latest">
-                        Ultima semana ({activeWeekRow?.weekLabel ?? "Sin datos"})
+                        Latest week ({activeWeekRow?.weekLabel ?? "No data"})
                       </option>
                       {weeklyRows.map((row) => (
                         <option key={`week-option-${getWeekKey(row)}`} value={getWeekKey(row)}>
@@ -1319,22 +1665,22 @@ function TeamsPageContent() {
                   </div>
                 ) : (
                   <div className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-500">
-                    Global no usa semana individual.
+                    Global mode does not use a single week.
                   </div>
                 )}
               </div>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-500">
-              <span className="rounded-full bg-slate-100 px-3 py-1">Preset activo: {activePresetLabel}</span>
+              <span className="rounded-full bg-slate-100 px-3 py-1">{t("Active preset", "Preset activo")}: {activePresetLabel}</span>
               <span className="rounded-full bg-slate-100 px-3 py-1">
-                Ranking: {selectedRankingMode === "weekly" ? "Semanal" : "Global"}
+                Ranking: {selectedRankingMode === "weekly" ? "Weekly" : "Global"}
               </span>
               <span className="rounded-full bg-slate-100 px-3 py-1">
-                Ultima actualizacion:{" "}
+                {t("Last updated", "Ultima actualizacion")}:{" "}
                 {snapshot?.generatedAt
-                  ? new Date(snapshot.generatedAt).toLocaleString("es-CO")
-                  : "Sin datos"}
+                  ? new Date(snapshot.generatedAt).toLocaleString(locale)
+                  : t("No data", "Sin datos")}
               </span>
             </div>
           </div>
@@ -1344,13 +1690,13 @@ function TeamsPageContent() {
       {!snapshot && (
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <p className="text-sm text-slate-600">
-            No hay datos operativos cargados. Ve al Data Center y procesa CSV.
+            No operational data is loaded yet. Go to Data Center and process a CSV.
           </p>
           <Link
             href="/upload"
             className="mt-4 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
           >
-            Ir a Data Center
+            Go to Data Center
           </Link>
         </section>
       )}
@@ -1374,94 +1720,44 @@ function TeamsPageContent() {
             </div>
 
             <p className="mt-4 text-xs uppercase tracking-[0.16em] text-blue-600">
-              Semana activa
+              Active week
             </p>
             <h2 className="mt-2 font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-900">
-              {activeWeekRow?.weekLabel ?? "Sin semana"}
+              {activeWeekRow?.weekLabel ?? "No week"}
             </h2>
             <p className="mt-1 text-sm text-slate-600">
               {activeWeekRow
-                ? `${activeWeekRow.firstDay} a ${activeWeekRow.lastDay}`
-                : "No hay datos semanales disponibles."}
+                ? `${activeWeekRow.firstDay} to ${activeWeekRow.lastDay}`
+                : "No weekly data is available."}
             </p>
 
             {activeWeekRow && (
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Draft Files</p>
-                  <p className="mt-1 text-2xl font-semibold text-slate-900">
-                    {formatNumber(activeWeekRow.draftFiles, 0)}
-                  </p>
-                  <DeltaPill
-                    current={activeWeekRow.draftFiles}
-                    previous={previousWeekRow?.draftFiles ?? null}
-                    decimals={0}
-                  />
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <p className="text-xs uppercase tracking-[0.12em] text-slate-500">QA Files</p>
-                  <p className="mt-1 text-2xl font-semibold text-slate-900">
-                    {formatNumber(activeWeekRow.qaFiles, 0)}
-                  </p>
-                  <DeltaPill
-                    current={activeWeekRow.qaFiles}
-                    previous={previousWeekRow?.qaFiles ?? null}
-                    decimals={0}
-                  />
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Draft Rate</p>
-                  <div className="mt-2">
-                    {renderMetricChip(
-                      activeWeekRow.draftRate,
-                      0,
-                      getDraftMetricTone(
-                        activeWeekRow.draftRate,
-                        averageDraftTarget,
-                        activeWeekRow.draftHours
-                      )
-                    )}
-                  </div>
-                  <div className="mt-1">
-                    <DeltaPill
-                      current={activeWeekRow.draftRate}
-                      previous={previousWeekRow?.draftRate ?? null}
-                      decimals={0}
-                    />
-                  </div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <p className="text-xs uppercase tracking-[0.12em] text-slate-500">QA Rate</p>
-                  <div className="mt-2">
-                    {renderMetricChip(
-                      activeWeekRow.qaRate,
-                      0,
-                      getQAMetricTone(activeWeekRow.qaRate, activeWeekRow.qaHours)
-                    )}
-                  </div>
-                  <div className="mt-1">
-                    <DeltaPill
-                      current={activeWeekRow.qaRate}
-                      previous={previousWeekRow?.qaRate ?? null}
-                      decimals={0}
-                    />
-                  </div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <p className="text-xs uppercase tracking-[0.12em] text-slate-500">QER</p>
-                  <div className="mt-2">
-                    {renderMetricChip(activeWeekRow.qer, 1, getQERTone(activeWeekRow.qer), "%")}
-                  </div>
-                  <div className="mt-1">
-                    <DeltaPill
-                      current={activeWeekRow.qer}
-                      previous={previousWeekRow?.qer ?? null}
-                      decimals={1}
-                      suffix="%"
-                      invert
-                    />
-                  </div>
-                </div>
+                <WeeklyDetailMetricCard
+                  title="Draft Files"
+                  value={formatNumber(activeWeekRow.draftFiles, 0)}
+                  helper="Files produced during the visible week."
+                />
+                <WeeklyDetailMetricCard
+                  title="QA Files"
+                  value={formatNumber(activeWeekRow.qaFiles, 0)}
+                  helper="Files reviewed by QA during the same period."
+                />
+                <WeeklyDetailMetricCard
+                  title="Draft Rate"
+                  value={formatNumber(activeWeekRow.draftRate, 0)}
+                  helper="Average production speed in sqft per hour."
+                />
+                <WeeklyDetailMetricCard
+                  title="QA Rate"
+                  value={formatNumber(activeWeekRow.qaRate, 0)}
+                  helper="Average review speed in sqft per hour."
+                />
+                <WeeklyDetailMetricCard
+                  title="QER"
+                  value={`${formatNumber(activeWeekRow.qer, 1)}%`}
+                  helper="Relationship between QA time and Draft time. Lower is better."
+                />
               </div>
             )}
           </section>
@@ -1509,10 +1805,10 @@ function TeamsPageContent() {
             <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex items-center justify-between">
                 <h2 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-                  Top 3 Draft ({selectedRankingMode === "weekly" ? "semana activa" : "global"})
+                  Top 3 Draft ({selectedRankingMode === "weekly" ? "active week" : "global"})
                 </h2>
                 <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  Velocidad
+                  Speed
                 </span>
               </div>
               <div className="mt-4 space-y-2">
@@ -1541,8 +1837,8 @@ function TeamsPageContent() {
                 {topDraftRows.length === 0 ? (
                   <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">
                     {selectedRankingMode === "weekly"
-                      ? "No hay drafters con horas en la semana activa."
-                      : "No hay drafters con horas en el rango global."}
+                      ? "No drafters have hours in the active week."
+                      : "No drafters have hours in the global range."}
                   </p>
                 ) : null}
               </div>
@@ -1551,10 +1847,10 @@ function TeamsPageContent() {
             <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex items-center justify-between">
                 <h2 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-                  Top 3 QA ({selectedRankingMode === "weekly" ? "semana activa" : "global"})
+                  Top 3 QA ({selectedRankingMode === "weekly" ? "active week" : "global"})
                 </h2>
                 <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                  Velocidad
+                  Speed
                 </span>
               </div>
               <div className="mt-4 space-y-2">
@@ -1579,66 +1875,97 @@ function TeamsPageContent() {
                 {topQaRows.length === 0 ? (
                   <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500">
                     {selectedRankingMode === "weekly"
-                      ? "No hay QA con horas en la semana activa."
-                      : "No hay QA con horas en el rango global."}
+                      ? "No QA members have hours in the active week."
+                      : "No QA members have hours in the global range."}
                   </p>
                 ) : null}
               </div>
             </article>
           </section>
 
-          <section className="grid gap-4 xl:grid-cols-3">
-            <ChartCard
-              title="Tendencia de velocidad por semana"
-              subtitle="Draft Rate, QA Rate y QER en la semana visible."
-            >
-              <ResponsiveContainer width="100%" height={280}>
-                <LineChart data={weeklyRows}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="weekLabel" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Line type="monotone" dataKey="draftRate" name="Draft Rate" stroke="#2563eb" strokeWidth={2.2} dot={{ r: 2.5 }} />
-                  <Line type="monotone" dataKey="qaRate" name="QA Rate" stroke="#10b981" strokeWidth={2.2} dot={{ r: 2.5 }} />
-                  <Line type="monotone" dataKey="qer" name="QER %" stroke="#ef4444" strokeWidth={2.2} dot={{ r: 2.5 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartCard>
+          <section className="space-y-4">
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="max-w-2xl">
+                  <h2 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
+                    Weekly speed trend
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Clean view focused on the two most useful production signals: Draft Rate and
+                    QA Rate. Active QER is summarized above to keep the chart easier to read.
+                  </p>
+                </div>
 
-            <ChartCard
-              title="Volumen semanal"
-              subtitle="Archivos Draft/QA por semana para el preset activo."
-            >
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={weeklyRows} barCategoryGap="35%">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="weekLabel" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="draftFiles" name="Draft Files" fill="#2563eb" barSize={14} />
-                  <Bar dataKey="qaFiles" name="QA Files" fill="#10b981" barSize={14} />
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartCard>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <MiniStat
+                    label="Weeks"
+                    value={formatNumber(weeklyRows.length, 0)}
+                    helper="Visible range"
+                  />
+                  <MiniStat
+                    label="Active week"
+                    value={activeWeekRow?.weekLabel ?? "-"}
+                    helper={
+                      activeWeekRow
+                        ? `${activeWeekRow.firstDay} - ${activeWeekRow.lastDay}`
+                        : "No range"
+                    }
+                  />
+                  <MiniStat
+                    label="Active QER"
+                    value={activeWeekRow ? `${formatNumber(activeWeekRow.qer, 1)}%` : "-"}
+                    helper="Quick quality read"
+                  />
+                </div>
+              </div>
 
-            <ChartCard
-              title="Horas semanales"
-              subtitle="Carga de horas operativas por semana."
-            >
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={weeklyRows} barCategoryGap="35%">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="weekLabel" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="draftHours" name="Draft Hours" fill="#7c3aed" barSize={14} />
-                  <Bar dataKey="qaHours" name="QA Hours" fill="#f59e0b" barSize={14} />
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartCard>
+              <div className="mt-6">
+                <ResponsiveContainer width="100%" height={320}>
+                  <LineChart data={weeklyRows}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="weekLabel" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="draftRate"
+                      name="Draft Rate"
+                      stroke="#2563eb"
+                      strokeWidth={2.6}
+                      dot={{ r: 2.5 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="qaRate"
+                      name="QA Rate"
+                      stroke="#10b981"
+                      strokeWidth={2.6}
+                      dot={{ r: 2.5 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </section>
+
+            <section className="grid gap-4">
+              <ChartCard
+                title="Weekly volume"
+                subtitle="Draft and QA files by week for the active preset."
+              >
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={weeklyRows} barCategoryGap="35%">
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="weekLabel" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="draftFiles" name="Draft Files" fill="#2563eb" barSize={14} />
+                    <Bar dataKey="qaFiles" name="QA Files" fill="#10b981" barSize={14} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
+            </section>
           </section>
 
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -1648,140 +1975,220 @@ function TeamsPageContent() {
                   Alert System
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Deteccion automatica de archivos con duracion alta, errores, tamano anomalo, multiples drafters y QA fuera de rango.
+                  Automatic detection for long-duration files, errors, abnormal file size, multiple drafters, and out-of-range QA behavior.
                 </p>
               </div>
               <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                {fileAlerts.length} alertas detectadas
+                {fileAlerts.length} alerts detected
               </span>
             </div>
 
-            {!teamFilter ? (
-              <p className="mt-4 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                Selecciona un equipo para habilitar alertas detalladas.
+            <div className="mt-4 grid gap-3 2xl:grid-cols-[1fr_1fr_1fr_1fr_auto]">
+              <FilterField label="Pod">
+                <div className="relative">
+                  <select
+                    value={selectedAlertTeam}
+                    onChange={(event) => setSelectedAlertTeam(event.target.value as TeamFilter)}
+                    className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500"
+                  >
+                    <option value="all">All pods ({teamOptions.length} RRE pods)</option>
+                    {teamOptions.map((team) => (
+                      <option key={`alert-team-option-${team}`} value={team}>
+                        {team}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
+                    <ChevronDownIcon />
+                  </span>
+                </div>
+              </FilterField>
+
+              <FilterField label="Person name">
+                <input
+                  value={alertPersonFilter}
+                  onChange={(event) => setAlertPersonFilter(event.target.value)}
+                  disabled={!alertTeamFilter}
+                  list="alert-person-options"
+                  placeholder="Type a pod member name..."
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                />
+              </FilterField>
+
+              <FilterField label="Week">
+                <div className="relative">
+                  <select
+                    value={alertWeekFilter}
+                    onChange={(event) => setAlertWeekFilter(event.target.value)}
+                    disabled={!alertTeamFilter}
+                    className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    <option value="all">All weeks</option>
+                    {alertWeekOptions.map((option) => (
+                      <option key={`alert-week-${option.value}`} value={option.value}>
+                        {option.label} - {option.helper}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
+                    <ChevronDownIcon />
+                  </span>
+                </div>
+              </FilterField>
+
+              <FilterField label="File name">
+                <input
+                  value={focusedFile}
+                  onChange={(event) => setFocusedFile(event.target.value)}
+                  disabled={!alertTeamFilter}
+                  placeholder="Filter by file..."
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                />
+              </FilterField>
+
+              <button
+                type="button"
+                disabled={!alertTeamFilter}
+                onClick={() => {
+                  setAlertPersonFilter("");
+                  setAlertWeekFilter("all");
+                  setFocusedFile("");
+                  setSelectedAlertFileName("");
+                }}
+                className="self-end rounded-xl bg-slate-100 px-3 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                Clear filters
+              </button>
+            </div>
+
+            <datalist id="alert-person-options">
+              {alertPersonOptions.map((name) => (
+                <option key={`alert-person-suggestion-${name}`} value={name} />
+              ))}
+            </datalist>
+
+            <p className="mt-3 text-xs text-slate-500">
+              Alerts use the pod selected here and stay synced when the main pod changes.
+            </p>
+
+            {!alertTeamFilter ? (
+              <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                Select a pod in this block to enable alerts and filters.
               </p>
             ) : (
-              <>
-                <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
-                  <input
-                    value={focusedFile}
-                    onChange={(event) => setFocusedFile(event.target.value)}
-                    placeholder="Filtrar por nombre de archivo..."
-                    className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-blue-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setFocusedFile("")}
-                    className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
-                  >
-                    Limpiar filtro
-                  </button>
-                </div>
+              <div className="mt-4 rounded-[24px] border border-slate-200 bg-[linear-gradient(135deg,rgba(248,250,252,0.92)_0%,rgba(255,255,255,1)_100%)] p-4">
+                {alertsLoading ? (
+                  <p className="text-sm text-slate-500">Loading alerts...</p>
+                ) : filteredFileAlerts.length === 0 ? (
+                  <p className="text-sm text-slate-500">No alerts were found for the current filter.</p>
+                ) : (
+                  <div className="max-h-[420px] overflow-auto pr-1">
+                    <div className="space-y-3">
+                      {filteredFileAlerts.map((alert) => {
+                        const active = selectedAlertFileName === alert.fileName;
+                        return (
+                          <article
+                            key={alert.id}
+                            onClick={() => setSelectedAlertFileName(alert.fileName)}
+                            className={`cursor-pointer rounded-2xl border bg-white p-4 shadow-sm transition ${
+                              active
+                                ? "border-blue-300 bg-blue-50/30 ring-2 ring-blue-100"
+                                : "border-slate-200 hover:border-slate-300 hover:bg-slate-50/60"
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap gap-2 text-xs">
+                                  <span
+                                    className={`rounded-full border px-3 py-1 font-semibold uppercase ${getIssueStyle(
+                                      alert.severity
+                                    )}`}
+                                  >
+                                    {alert.severity}
+                                  </span>
+                                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                    {alert.weekLabel}
+                                  </span>
+                                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                    {alert.firstDay} - {alert.lastDay}
+                                  </span>
+                                  <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                    {alert.team}
+                                  </span>
+                                </div>
 
-                <div className="mt-4 max-h-[360px] overflow-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="sticky top-0 border-b border-slate-200 bg-white text-left text-slate-500">
-                        <th className="py-3 pr-4">Severidad</th>
-                        <th className="py-3 pr-4">File</th>
-                        <th className="py-3 pr-4">Drafter</th>
-                        <th className="py-3 pr-4">QA</th>
-                        <th className="py-3 pr-4">Issue</th>
-                        <th className="py-3 pr-4">Valor</th>
-                        <th className="py-3 pr-4">Accion</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {alertsLoading ? (
-                        <tr>
-                          <td colSpan={7} className="py-8 text-center text-sm text-slate-500">
-                            Cargando alertas...
-                          </td>
-                        </tr>
-                      ) : (
-                        fileAlerts
-                          .filter((alert) => {
-                            if (!focusedFile.trim()) return true;
-                            return normalizeValue(alert.fileName)
-                              .toLowerCase()
-                              .includes(focusedFile.trim().toLowerCase());
-                          })
-                          .map((alert) => (
-                            <tr
-                              key={alert.id}
-                              className="border-b border-slate-100 transition hover:bg-slate-50"
-                            >
-                              <td className="py-3 pr-4">
-                                <span
-                                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${getIssueStyle(
-                                    alert.severity
-                                  )}`}
-                                >
-                                  {alert.severity}
-                                </span>
-                              </td>
-                              <td className="max-w-[280px] truncate py-3 pr-4 font-medium text-slate-900">
-                                {alert.fileName}
-                              </td>
-                              <td className="max-w-[220px] truncate py-3 pr-4">{alert.drafter}</td>
-                              <td className="max-w-[220px] truncate py-3 pr-4">{alert.qa}</td>
-                              <td className="py-3 pr-4">{alert.issue}</td>
-                              <td className="py-3 pr-4 text-slate-600">{alert.value}</td>
-                              <td className="py-3 pr-4">
-                                <button
-                                  type="button"
-                                  onClick={() => setFocusedFile(alert.fileName)}
-                                  className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
-                                >
-                                  View detail
-                                </button>
-                              </td>
-                            </tr>
-                          ))
-                      )}
-                      {!alertsLoading &&
-                      fileAlerts.filter((alert) => {
-                        if (!focusedFile.trim()) return true;
-                        return normalizeValue(alert.fileName)
-                          .toLowerCase()
-                          .includes(focusedFile.trim().toLowerCase());
-                      }).length === 0 ? (
-                        <tr>
-                          <td colSpan={7} className="py-6 text-center text-sm text-slate-500">
-                            No hay alertas con ese filtro.
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-              </>
+                                {isUrl(alert.fileName) ? (
+                                  <a
+                                    href={alert.fileName}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="mt-3 block break-all text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 transition hover:text-blue-700 hover:decoration-blue-400"
+                                  >
+                                    {alert.fileName}
+                                  </a>
+                                ) : (
+                                  <p className="mt-3 break-all text-sm font-semibold text-slate-900">
+                                    {alert.fileName}
+                                  </p>
+                                )}
+
+                                <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                                  <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
+                                    Drafter: {alert.drafter}
+                                  </span>
+                                  <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
+                                    QA: {alert.qa}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="min-w-[220px] rounded-2xl bg-slate-50 px-4 py-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                  Issue
+                                </p>
+                                <p className="mt-1 text-sm font-semibold text-slate-900">{alert.issue}</p>
+                                <p className="mt-2 text-sm text-slate-600">{alert.value}</p>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </section>
 
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-wrap items-end justify-between gap-2">
+          <details open className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-2">
               <div>
                 <h2 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-                  Ranking Drafters (velocidad)
+                  Drafter ranking (speed)
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Ordenado por Draft Rate en modo{" "}
-                  {selectedRankingMode === "weekly" ? "semanal" : "global acumulado"}.
+                  Sorted by Draft Rate in{" "}
+                  {selectedRankingMode === "weekly" ? "weekly" : "global cumulative"} mode.
                 </p>
               </div>
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
-                {drafterRows.length} personas
-              </span>
-            </div>
-            <div className="mt-4 max-h-[480px] overflow-auto">
+              <div className="flex items-center gap-3">
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+                  {drafterRows.length} people
+                </span>
+                <span className="grid h-10 w-10 place-items-center rounded-full border border-slate-900 bg-slate-900 text-white shadow-sm transition group-open:rotate-180">
+                  <ChevronDownIcon className="h-5 w-5" />
+                </span>
+              </div>
+            </summary>
+            <div className="mt-4 overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-slate-500">
                     <th className="sticky top-0 bg-white py-3 pr-4">#</th>
                     <th className="sticky top-0 bg-white py-3 pr-4">
                       <SortHeaderButton
-                        label="Nombre"
+                        label="Name"
                         active={drafterSort.key === "name"}
                         direction={drafterSort.direction}
                         onClick={() => toggleDrafterSort("name")}
@@ -1795,8 +2202,8 @@ function TeamsPageContent() {
                         onClick={() => toggleDrafterSort("team")}
                       />
                     </th>
-                    <th className="sticky top-0 bg-white py-3 pr-4">Rol</th>
-                    <th className="sticky top-0 bg-white py-3 pr-4">Nivel</th>
+                    <th className="sticky top-0 bg-white py-3 pr-4">Role</th>
+                    <th className="sticky top-0 bg-white py-3 pr-4">Level</th>
                     <th className="sticky top-0 bg-white py-3 pr-4">Target</th>
                     <th className="sticky top-0 bg-white py-3 pr-4">
                       <SortHeaderButton
@@ -1820,7 +2227,7 @@ function TeamsPageContent() {
                         active={drafterSort.key === "draftRate"}
                         direction={drafterSort.direction}
                         onClick={() => toggleDrafterSort("draftRate")}
-                        tooltip="Draft Rate = velocidad Draft en sqft/h"
+                        tooltip="Draft Rate = Draft speed in sqft/h"
                       />
                     </th>
                     <th className="sticky top-0 bg-white py-3 pr-4">
@@ -1856,8 +2263,8 @@ function TeamsPageContent() {
                         onClick={() => toggleDrafterSort("l3")}
                       />
                     </th>
-                    <th className="sticky top-0 bg-white py-3 pr-4">Funciones</th>
-                    <th className="sticky top-0 bg-white py-3 pr-4">Editar</th>
+                    <th className="sticky top-0 bg-white py-3 pr-4">Functions</th>
+                    <th className="sticky top-0 bg-white py-3 pr-4">Edit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1884,7 +2291,7 @@ function TeamsPageContent() {
                         </td>
                         <td className="py-3 pr-4">{row.team}</td>
                         <td className="py-3 pr-4">{row.role}</td>
-                        <td className="py-3 pr-4">{row.level}</td>
+                        <td className="py-3 pr-4">{formatLevelLabel(row.level)}</td>
                         <td className="py-3 pr-4">{row.targetLabel}</td>
                         <td className="py-3 pr-4">{formatNumber(row.draftFiles, 0)}</td>
                         <td className="py-3 pr-4">{formatNumber(row.draftHours, 2)}</td>
@@ -1914,7 +2321,7 @@ function TeamsPageContent() {
                                 </span>
                               ))
                             ) : (
-                              <span className="text-xs text-slate-400">Sin funciones</span>
+                              <span className="text-xs text-slate-400">No functions</span>
                             )}
                           </div>
                         </td>
@@ -1927,7 +2334,7 @@ function TeamsPageContent() {
                             }}
                             className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
                           >
-                            Editar
+                            Edit
                           </button>
                         </td>
                       </tr>
@@ -1937,31 +2344,36 @@ function TeamsPageContent() {
                     <tr>
                       <td colSpan={15} className="py-6 text-center text-sm text-slate-500">
                         {selectedRankingMode === "weekly"
-                          ? "No hay drafters para la semana activa."
-                          : "No hay drafters en el rango global."}
+                          ? "No drafters are available for the active week."
+                          : "No drafters are available in the global range."}
                       </td>
                     </tr>
                   ) : null}
                 </tbody>
               </table>
             </div>
-          </section>
+          </details>
 
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-wrap items-end justify-between gap-2">
+          <details open className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-2">
               <div>
                 <h2 className="font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-                  Ranking QA (velocidad)
+                  QA ranking (speed)
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Ordenado por QA Rate en modo{" "}
-                  {selectedRankingMode === "weekly" ? "semanal" : "global acumulado"}.
+                  Sorted by QA Rate in{" "}
+                  {selectedRankingMode === "weekly" ? "weekly" : "global cumulative"} mode.
                 </p>
               </div>
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
-                {qaRows.length} personas
-              </span>
-            </div>
+              <div className="flex items-center gap-3">
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+                  {qaRows.length} people
+                </span>
+                <span className="grid h-10 w-10 place-items-center rounded-full border border-slate-900 bg-slate-900 text-white shadow-sm transition group-open:rotate-180">
+                  <ChevronDownIcon className="h-5 w-5" />
+                </span>
+              </div>
+            </summary>
 
             <div className="mt-4 max-h-[480px] overflow-auto">
               <table className="min-w-full text-sm">
@@ -1970,7 +2382,7 @@ function TeamsPageContent() {
                     <th className="sticky top-0 bg-white py-3 pr-4">#</th>
                     <th className="sticky top-0 bg-white py-3 pr-4">
                       <SortHeaderButton
-                        label="Nombre"
+                        label="Name"
                         active={qaSort.key === "name"}
                         direction={qaSort.direction}
                         onClick={() => toggleQASort("name")}
@@ -1984,8 +2396,8 @@ function TeamsPageContent() {
                         onClick={() => toggleQASort("team")}
                       />
                     </th>
-                    <th className="sticky top-0 bg-white py-3 pr-4">Rol</th>
-                    <th className="sticky top-0 bg-white py-3 pr-4">Nivel</th>
+                    <th className="sticky top-0 bg-white py-3 pr-4">Role</th>
+                    <th className="sticky top-0 bg-white py-3 pr-4">Level</th>
                     <th className="sticky top-0 bg-white py-3 pr-4">Target</th>
                     <th className="sticky top-0 bg-white py-3 pr-4">
                       <SortHeaderButton
@@ -2009,7 +2421,7 @@ function TeamsPageContent() {
                         active={qaSort.key === "qaRate"}
                         direction={qaSort.direction}
                         onClick={() => toggleQASort("qaRate")}
-                        tooltip="QA Rate = velocidad QA en sqft/h"
+                        tooltip="QA Rate = QA speed in sqft/h"
                       />
                     </th>
                     <th className="sticky top-0 bg-white py-3 pr-4">
@@ -2021,8 +2433,8 @@ function TeamsPageContent() {
                         tooltip="QER = QA Time / Draft Time * 100"
                       />
                     </th>
-                    <th className="sticky top-0 bg-white py-3 pr-4">Funciones</th>
-                    <th className="sticky top-0 bg-white py-3 pr-4">Editar</th>
+                    <th className="sticky top-0 bg-white py-3 pr-4">Functions</th>
+                    <th className="sticky top-0 bg-white py-3 pr-4">Edit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2049,7 +2461,7 @@ function TeamsPageContent() {
                         </td>
                         <td className="py-3 pr-4">{row.team}</td>
                         <td className="py-3 pr-4">{row.role}</td>
-                        <td className="py-3 pr-4">{row.level}</td>
+                        <td className="py-3 pr-4">{formatLevelLabel(row.level)}</td>
                         <td className="py-3 pr-4">{row.targetLabel}</td>
                         <td className="py-3 pr-4">{formatNumber(row.qaFiles, 0)}</td>
                         <td className="py-3 pr-4">{formatNumber(row.qaHours, 2)}</td>
@@ -2072,7 +2484,7 @@ function TeamsPageContent() {
                                 </span>
                               ))
                             ) : (
-                              <span className="text-xs text-slate-400">Sin funciones</span>
+                              <span className="text-xs text-slate-400">No functions</span>
                             )}
                           </div>
                         </td>
@@ -2085,7 +2497,7 @@ function TeamsPageContent() {
                             }}
                             className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
                           >
-                            Editar
+                            Edit
                           </button>
                         </td>
                       </tr>
@@ -2095,26 +2507,25 @@ function TeamsPageContent() {
                     <tr>
                       <td colSpan={12} className="py-6 text-center text-sm text-slate-500">
                         {selectedRankingMode === "weekly"
-                          ? "No hay QA para la semana activa."
-                          : "No hay QA en el rango global."}
+                          ? "No QA members are available for the active week."
+                          : "No QA members are available in the global range."}
                       </td>
                     </tr>
                   ) : null}
                 </tbody>
               </table>
             </div>
-          </section>
+          </details>
 
           <details className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <summary className="flex cursor-pointer list-none items-center justify-between font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-              <span>Acumulado semanal (historico completo)</span>
+              <span>Weekly rollup (full history)</span>
               <span className="text-slate-400 transition group-open:rotate-180">
                 <ChevronDownIcon />
               </span>
             </summary>
             <p className="mt-2 text-sm text-slate-500">
-              Cada semana es clicable para abrir una vista de detalle con ranking, comparativo y
-              alertas.
+              Each week is clickable to open a detail view with ranking, comparison, and alerts.
             </p>
             <div className="mt-4 overflow-x-auto">
               <table className="min-w-full text-sm">
@@ -2147,7 +2558,7 @@ function TeamsPageContent() {
                         className={`border-b border-slate-100 ${
                           isTotal ? "bg-slate-50" : "cursor-pointer hover:bg-blue-50/50"
                         } ${isSelected ? "bg-blue-50/60" : ""}`}
-                        title={isTotal ? undefined : "Click para ver detalle semanal"}
+                        title={isTotal ? undefined : "Click to open weekly detail"}
                       >
                         <td className="py-3 pr-4 font-semibold text-slate-900">{row.weekLabel}</td>
                         <td className="py-3 pr-4">{row.firstDay}</td>
@@ -2192,73 +2603,41 @@ function TeamsPageContent() {
                   onClick={() => setSelectedHistoryWeekKey(null)}
                   className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
                 >
-                  Volver a semana activa
+                  Back to active week
                 </button>
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Draft Rate</p>
-                  <div className="mt-1">{renderMetricChip(historyWeekRow.draftRate, 0, getDraftMetricTone(historyWeekRow.draftRate, averageDraftTarget, historyWeekRow.draftHours))}</div>
-                  <div className="mt-1">
-                    <DeltaPill
-                      current={historyWeekRow.draftRate}
-                      previous={historyPreviousWeekRow?.draftRate ?? null}
-                      decimals={0}
-                    />
-                  </div>
-                </article>
-                <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">QA Rate</p>
-                  <div className="mt-1">{renderMetricChip(historyWeekRow.qaRate, 0, getQAMetricTone(historyWeekRow.qaRate, historyWeekRow.qaHours))}</div>
-                  <div className="mt-1">
-                    <DeltaPill
-                      current={historyWeekRow.qaRate}
-                      previous={historyPreviousWeekRow?.qaRate ?? null}
-                      decimals={0}
-                    />
-                  </div>
-                </article>
-                <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">QER</p>
-                  <div className="mt-1">{renderMetricChip(historyWeekRow.qer, 1, getQERTone(historyWeekRow.qer), "%")}</div>
-                  <div className="mt-1">
-                    <DeltaPill
-                      current={historyWeekRow.qer}
-                      previous={historyPreviousWeekRow?.qer ?? null}
-                      decimals={1}
-                      suffix="%"
-                      invert
-                    />
-                  </div>
-                </article>
-                <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Draft Files</p>
-                  <p className="mt-1 text-xl font-semibold text-slate-900">
-                    {formatNumber(historyWeekRow.draftFiles, 0)}
-                  </p>
-                  <DeltaPill
-                    current={historyWeekRow.draftFiles}
-                    previous={historyPreviousWeekRow?.draftFiles ?? null}
-                    decimals={0}
-                  />
-                </article>
-                <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">QA Files</p>
-                  <p className="mt-1 text-xl font-semibold text-slate-900">
-                    {formatNumber(historyWeekRow.qaFiles, 0)}
-                  </p>
-                  <DeltaPill
-                    current={historyWeekRow.qaFiles}
-                    previous={historyPreviousWeekRow?.qaFiles ?? null}
-                    decimals={0}
-                  />
-                </article>
+                <WeeklyDetailMetricCard
+                  title="Draft Rate"
+                  value={formatNumber(historyWeekRow.draftRate, 0)}
+                  helper="Average production speed for the selected week."
+                />
+                <WeeklyDetailMetricCard
+                  title="QA Rate"
+                  value={formatNumber(historyWeekRow.qaRate, 0)}
+                  helper="Average review speed for the same range."
+                />
+                <WeeklyDetailMetricCard
+                  title="QER"
+                  value={`${formatNumber(historyWeekRow.qer, 1)}%`}
+                  helper="Relationship between QA time and Draft time. Lower is better."
+                />
+                <WeeklyDetailMetricCard
+                  title="Draft Files"
+                  value={formatNumber(historyWeekRow.draftFiles, 0)}
+                  helper="Files produced by the team in that week."
+                />
+                <WeeklyDetailMetricCard
+                  title="QA Files"
+                  value={formatNumber(historyWeekRow.qaFiles, 0)}
+                  helper="Files reviewed by QA during that period."
+                />
               </div>
 
               <div className="mt-5 grid gap-4 xl:grid-cols-2">
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <h4 className="font-semibold text-slate-900">Top drafters de la semana</h4>
+                  <h4 className="font-semibold text-slate-900">Top drafters of the week</h4>
                   <div className="mt-3 space-y-2">
                     {historyWeekDrafters.slice(0, 5).map((row) => (
                       <button
@@ -2274,13 +2653,13 @@ function TeamsPageContent() {
                       </button>
                     ))}
                     {historyWeekDrafters.length === 0 ? (
-                      <p className="text-sm text-slate-500">Sin drafters en esta semana.</p>
+                      <p className="text-sm text-slate-500">No drafters in this week.</p>
                     ) : null}
                   </div>
                 </article>
 
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <h4 className="font-semibold text-slate-900">Top QA de la semana</h4>
+                  <h4 className="font-semibold text-slate-900">Top QA of the week</h4>
                   <div className="mt-3 space-y-2">
                     {historyWeekQa.slice(0, 5).map((row) => (
                       <button
@@ -2296,7 +2675,7 @@ function TeamsPageContent() {
                       </button>
                     ))}
                     {historyWeekQa.length === 0 ? (
-                      <p className="text-sm text-slate-500">Sin QA en esta semana.</p>
+                      <p className="text-sm text-slate-500">No QA members in this week.</p>
                     ) : null}
                   </div>
                 </article>
@@ -2304,7 +2683,7 @@ function TeamsPageContent() {
 
               <div className="mt-5 grid gap-4 xl:grid-cols-2">
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <h4 className="font-semibold text-slate-900">Comparacion de equipos (semana)</h4>
+                  <h4 className="font-semibold text-slate-900">Team comparison (week)</h4>
                   <div className="mt-3 space-y-3">
                     {historyWeekTeamComparison.map((row) => (
                       <div key={`detail-team-${row.team}`} className="rounded-lg bg-white p-3">
@@ -2325,7 +2704,7 @@ function TeamsPageContent() {
                 </article>
 
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <h4 className="font-semibold text-slate-900">Highlights y alertas</h4>
+                  <h4 className="font-semibold text-slate-900">Highlights and alerts</h4>
                   <ul className="mt-3 space-y-2">
                     {historyInsights.map((insight) => (
                       <li key={insight} className="rounded-lg bg-white px-3 py-2 text-sm text-slate-700">
@@ -2334,7 +2713,7 @@ function TeamsPageContent() {
                     ))}
                     {historyInsights.length === 0 ? (
                       <li className="rounded-lg bg-white px-3 py-2 text-sm text-slate-600">
-                        Sin alertas para esta semana.
+                        No alerts for this week.
                       </li>
                     ) : null}
                   </ul>
@@ -2355,7 +2734,7 @@ function TeamsPageContent() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs uppercase tracking-[0.14em] text-slate-400">
-                      Editar funciones
+                      Edit person
                     </p>
                     <h3 className="mt-1 font-[var(--font-space-grotesk)] text-2xl font-semibold text-slate-900">
                       {functionsEditorRow.name}
@@ -2369,8 +2748,36 @@ function TeamsPageContent() {
                     onClick={() => setFunctionsEditorRow(null)}
                     className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-200"
                   >
-                    Cerrar
+                    Close
                   </button>
+                </div>
+
+                <div className="mt-5">
+                  <p className="text-xs uppercase tracking-[0.14em] text-slate-400">
+                    Level
+                  </p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                    {(["Junior", "Intermedio", "Senior"] as Level[]).map((levelOption) => {
+                      const isActive = getLevelForRow(functionsEditorRow) === levelOption;
+                      return (
+                        <button
+                          key={`editor-level-${functionsEditorRow.name}-${levelOption}`}
+                          type="button"
+                          onClick={() => updatePersonLevel(functionsEditorRow, levelOption)}
+                          className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${
+                            isActive
+                              ? "border-blue-600 bg-blue-600 text-white shadow-sm"
+                              : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          {formatLevelLabel(levelOption)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Change this person&apos;s operating level between Junior, Intermediate, and Senior.
+                  </p>
                 </div>
 
                 <div className="mt-5 grid gap-2 sm:grid-cols-2">
@@ -2395,14 +2802,14 @@ function TeamsPageContent() {
 
                 <div className="mt-5 flex items-center justify-between">
                   <p className="text-xs text-slate-500">
-                    Selecciona una o varias funciones para esta persona.
+                    Select one or more functions and adjust this person&apos;s level.
                   </p>
                   <button
                     type="button"
                     onClick={() => setFunctionsEditorRow(null)}
                     className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
                   >
-                    Listo
+                    Done
                   </button>
                 </div>
               </div>
