@@ -1198,7 +1198,7 @@ function TeamsPageContent() {
 
       if (entry.maxDraftHours > 5 || entry.maxQaHours > 5) {
         alerts.push({
-          id: `${entry.fileName}-duration`,
+          id: `${entry.fileName}|${entry.weekKey}|duration`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,
@@ -1216,7 +1216,7 @@ function TeamsPageContent() {
 
       if (entry.totalErrors >= 8) {
         alerts.push({
-          id: `${entry.fileName}-errors`,
+          id: `${entry.fileName}|${entry.weekKey}|errors`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,
@@ -1234,7 +1234,7 @@ function TeamsPageContent() {
 
       if (entry.maxSqft > 15000 || (entry.minSqft !== Number.MAX_SAFE_INTEGER && entry.minSqft < 150)) {
         alerts.push({
-          id: `${entry.fileName}-size`,
+          id: `${entry.fileName}|${entry.weekKey}|size`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,
@@ -1252,7 +1252,7 @@ function TeamsPageContent() {
 
       if (entry.drafters.size > 1) {
         alerts.push({
-          id: `${entry.fileName}-multi-drafter`,
+          id: `${entry.fileName}|${entry.weekKey}|multi-drafter`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,
@@ -1273,7 +1273,7 @@ function TeamsPageContent() {
         entry.maxQaRate > QA_TARGET_MAX * 1.5
       ) {
         alerts.push({
-          id: `${entry.fileName}-qa-abnormal`,
+          id: `${entry.fileName}|${entry.weekKey}|qa-abnormal`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,

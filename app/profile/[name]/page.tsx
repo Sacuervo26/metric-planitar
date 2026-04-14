@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -543,6 +543,36 @@ export default function PersonProfilePage() {
   const [uploadRows, setUploadRows] = useState<CsvRow[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(true);
   const [selectedAlertWeekKey, setSelectedAlertWeekKey] = useState("all");
+  const [draftTrendVisible, setDraftTrendVisible] = useState<Record<PersonPresetMode, boolean>>(
+    () => ({
+      combined: true,
+      std: true,
+      premium: true,
+      ads_std: true,
+      ads_prem: true,
+      gt10k: false,
+    })
+  );
+  const [peopleSearchQuery, setPeopleSearchQuery] = useState("");
+  const [selectedPeoplePods, setSelectedPeoplePods] = useState<string[]>([]);
+  const [podsInitialized, setPodsInitialized] = useState(false);
+  const [podsDropdownOpen, setPodsDropdownOpen] = useState(false);
+  const podsDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function handleOutsideClick(event: MouseEvent) {
+      if (!podsDropdownRef.current) return;
+      if (!podsDropdownRef.current.contains(event.target as Node)) {
+        setPodsDropdownOpen(false);
+      }
+    }
+    if (podsDropdownOpen) {
+      window.addEventListener("mousedown", handleOutsideClick);
+    }
+    return () => {
+      window.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [podsDropdownOpen]);
   const [notes] = useState<ProfileNotes>(() => {
     if (typeof window === "undefined" || !personName) return defaultProfileNotes(personName);
     try {
@@ -792,6 +822,88 @@ export default function PersonProfilePage() {
       .map((entry) => entry.row);
   }, [weeklyRowsByPreset]);
 
+  const peopleDirectory = useMemo(() => {
+    const map = new Map<string, { name: string; pods: Set<string> }>();
+    // Each person must be attributed to THEIR OWN team/pod, not the row's
+    // drafter team. Drafter uses COL_DRAFTER_TEAM, QA uses COL_QA_TEAM.
+    for (const row of uploadRows) {
+      const drafterTeam = normalizeValue(getField(row, COL_DRAFTER_TEAM)).toUpperCase();
+      const qaTeam = normalizeValue(getField(row, COL_QA_TEAM)).toUpperCase();
+      const drafter = normalizeValue(getField(row, COL_DRAFTER_NAME));
+      const qa = normalizeValue(getField(row, COL_QA_NAME));
+      const entries: Array<{ person: string; pod: string }> = [];
+      if (drafter) entries.push({ person: drafter, pod: drafterTeam });
+      if (qa) entries.push({ person: qa, pod: qaTeam });
+      for (const { person, pod } of entries) {
+        const key = normalizeName(person);
+        if (!key) continue;
+        const existing = map.get(key);
+        if (existing) {
+          if (pod) existing.pods.add(pod);
+        } else {
+          map.set(key, {
+            name: person,
+            pods: pod ? new Set([pod]) : new Set<string>(),
+          });
+        }
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [uploadRows]);
+
+  const availablePods = useMemo(() => {
+    const pods = new Set<string>();
+    peopleDirectory.forEach((p) =>
+      p.pods.forEach((pod) => {
+        if (pod.toUpperCase().startsWith("RRE")) pods.add(pod);
+      })
+    );
+    return Array.from(pods).sort();
+  }, [peopleDirectory]);
+
+  useEffect(() => {
+    if (!podsInitialized && availablePods.length > 0) {
+      setSelectedPeoplePods(availablePods);
+      setPodsInitialized(true);
+    }
+  }, [availablePods, podsInitialized]);
+
+  const filteredPeople = useMemo(() => {
+    const q = peopleSearchQuery.trim().toLowerCase();
+    const podSet = new Set(selectedPeoplePods);
+    return peopleDirectory.filter((p) => {
+      if (podSet.size === 0) return false;
+      let matchesPod = false;
+      for (const pod of p.pods) {
+        if (podSet.has(pod)) {
+          matchesPod = true;
+          break;
+        }
+      }
+      if (!matchesPod) return false;
+      if (q && !p.name.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [peopleDirectory, selectedPeoplePods, peopleSearchQuery]);
+
+  const draftTrendYDomain = useMemo<[number, number]>(() => {
+    let visibleMax = 0;
+    draftTrendComparisonRows.forEach((row) => {
+      DRAFT_TREND_SERIES.forEach((series) => {
+        if (!draftTrendVisible[series.preset]) return;
+        const raw = row[series.dataKey];
+        const value = typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+        if (value > visibleMax) visibleMax = value;
+      });
+    });
+    if (visibleMax <= 0) return [0, 1];
+    // Small headroom over the actual max (~10%), rounded to a nice step so
+    // the chart uses the full vertical space without wasted empty area.
+    const padded = visibleMax * 1.1;
+    const step = padded >= 10000 ? 2000 : padded >= 5000 ? 1000 : padded >= 1000 ? 500 : 100;
+    return [0, Math.ceil(padded / step) * step];
+  }, [draftTrendComparisonRows, draftTrendVisible]);
+
   const sparklineSeries = useMemo(
     () => ({
       draftRate: trendRows.map((row) => row.draftRate),
@@ -912,7 +1024,7 @@ export default function PersonProfilePage() {
 
       if (entry.maxDraftHours > 5 || entry.maxQaHours > 5) {
         alerts.push({
-          id: `${entry.fileName}-duration`,
+          id: `${entry.fileName}|${entry.weekKey}|duration`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,
@@ -930,7 +1042,7 @@ export default function PersonProfilePage() {
 
       if (entry.totalErrors >= 8) {
         alerts.push({
-          id: `${entry.fileName}-errors`,
+          id: `${entry.fileName}|${entry.weekKey}|errors`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,
@@ -951,7 +1063,7 @@ export default function PersonProfilePage() {
         (entry.minSqft !== Number.MAX_SAFE_INTEGER && entry.minSqft < 150)
       ) {
         alerts.push({
-          id: `${entry.fileName}-size`,
+          id: `${entry.fileName}|${entry.weekKey}|size`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,
@@ -969,7 +1081,7 @@ export default function PersonProfilePage() {
 
       if (entry.drafters.size > 1) {
         alerts.push({
-          id: `${entry.fileName}-multi-drafter`,
+          id: `${entry.fileName}|${entry.weekKey}|multi-drafter`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,
@@ -990,7 +1102,7 @@ export default function PersonProfilePage() {
         entry.maxQaRate > 11000 * 1.5
       ) {
         alerts.push({
-          id: `${entry.fileName}-qa-abnormal`,
+          id: `${entry.fileName}|${entry.weekKey}|qa-abnormal`,
           fileName: entry.fileName,
           team: entry.team,
           weekKey: entry.weekKey,
@@ -1103,7 +1215,8 @@ export default function PersonProfilePage() {
               </div>
             </div>
 
-            <div className="mt-6 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+            <div className="mt-6 grid items-start gap-4 lg:grid-cols-[1.4fr_1fr]">
+              <div className="flex flex-col gap-4">
               <article className="rounded-[26px] border border-white/60 bg-white/72 p-5 shadow-sm">
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t("Profile", "Perfil")}</p>
                 <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600">
@@ -1203,6 +1316,181 @@ export default function PersonProfilePage() {
                   <span className="rounded-full bg-white px-3 py-1.5 ring-1 ring-slate-200">
                     Mode: {profileMode === "weekly" ? "Weekly" : "Global"}
                   </span>
+                </div>
+              </article>
+              </div>
+
+              <article className="rounded-[26px] border border-white/60 bg-white/72 p-5 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                    {t("Find people", "Buscar personas")}
+                  </p>
+                  <span className="rounded-full bg-white px-2.5 py-0.5 text-[10px] font-semibold text-slate-500 ring-1 ring-slate-200">
+                    {filteredPeople.length}
+                  </span>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={peopleSearchQuery}
+                      onChange={(e) => setPeopleSearchQuery(e.target.value)}
+                      placeholder={t("Search by name...", "Busca por nombre...")}
+                      className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-2.5 pr-9 text-sm text-slate-700 outline-none transition focus:border-blue-500"
+                    />
+                    {peopleSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setPeopleSearchQuery("")}
+                        className="absolute inset-y-0 right-3 flex items-center text-xs text-slate-400 hover:text-slate-600"
+                        aria-label={t("Clear", "Limpiar")}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div ref={podsDropdownRef} className="relative mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setPodsDropdownOpen((prev) => !prev)}
+                    className={`flex w-full items-center justify-between rounded-2xl border px-4 py-2.5 text-left transition ${
+                      podsDropdownOpen
+                        ? "border-blue-300 bg-white shadow-lg shadow-blue-100/60"
+                        : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        {t("Pods", "Pods")}
+                      </p>
+                      <p className="mt-0.5 truncate text-sm font-medium text-slate-900">
+                        {selectedPeoplePods.length === 0
+                          ? t("No selection", "Sin seleccion")
+                          : selectedPeoplePods.length === availablePods.length
+                            ? t(`All (${availablePods.length})`, `Todos (${availablePods.length})`)
+                            : `${selectedPeoplePods.length} ${t("selected", "seleccionados")}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                        {selectedPeoplePods.length}/{availablePods.length}
+                      </span>
+                      <svg
+                        viewBox="0 0 20 20"
+                        fill="none"
+                        className={`h-4 w-4 transition ${podsDropdownOpen ? "rotate-180" : ""}`}
+                      >
+                        <path
+                          d="m5 7 5 6 5-6"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </div>
+                  </button>
+
+                  {podsDropdownOpen ? (
+                    <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl shadow-slate-200/70">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">{t("Pods", "Pods")}</p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedPeoplePods(availablePods)}
+                            className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
+                          >
+                            {t("Select all", "Seleccionar todo")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedPeoplePods([])}
+                            className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
+                          >
+                            {t("Clear all", "Limpiar todo")}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
+                        {availablePods.length === 0 ? (
+                          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                            {t("No pods available.", "No hay pods disponibles.")}
+                          </div>
+                        ) : (
+                          availablePods.map((pod) => {
+                            const checked = selectedPeoplePods.includes(pod);
+                            return (
+                              <label
+                                key={`people-pod-${pod}`}
+                                className={`flex cursor-pointer items-center justify-between rounded-2xl border px-3 py-2 transition ${
+                                  checked
+                                    ? "border-blue-200 bg-blue-50/70"
+                                    : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                                }`}
+                              >
+                                <span className="flex min-w-0 items-center gap-3">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() =>
+                                      setSelectedPeoplePods((prev) =>
+                                        checked ? prev.filter((p) => p !== pod) : [...prev, pod]
+                                      )
+                                    }
+                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                  />
+                                  <span className="truncate text-sm font-medium text-slate-900">
+                                    {pod}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="mt-3 max-h-[220px] overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-white/80">
+                  {filteredPeople.length === 0 ? (
+                    <p className="px-3 py-4 text-center text-xs text-slate-500">
+                      {peopleDirectory.length === 0
+                        ? t("No data available yet.", "No hay datos disponibles aún.")
+                        : t("No matches.", "Sin resultados.")}
+                    </p>
+                  ) : (
+                    <ul className="divide-y divide-slate-100 text-sm">
+                      {filteredPeople.map((p) => {
+                        const isCurrent = normalizeName(p.name) === normalizedPersonName;
+                        // Show only the pods that match the current pod filter.
+                        const matchingPods = Array.from(p.pods)
+                          .filter((pod) => selectedPeoplePods.includes(pod))
+                          .sort();
+                        const podLabel = matchingPods[0] ?? "-";
+                        const extraCount = matchingPods.length - 1;
+                        return (
+                          <li key={`people-${normalizeName(p.name)}`}>
+                            <Link
+                              href={`/profile/${encodeURIComponent(p.name)}`}
+                              className={`flex min-w-0 items-center justify-between gap-2 px-3 py-2 transition hover:bg-slate-50 ${
+                                isCurrent ? "bg-slate-100" : ""
+                              }`}
+                            >
+                              <span className="min-w-0 flex-1 truncate font-medium text-slate-800">
+                                {p.name}
+                              </span>
+                              <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                                {podLabel}
+                                {extraCount > 0 ? ` +${extraCount}` : ""}
+                              </span>
+                            </Link>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
                 </div>
               </article>
             </div>
@@ -1324,19 +1612,54 @@ export default function PersonProfilePage() {
             />
           </section>
 
-          <section className="grid gap-4 xl:grid-cols-2">
+          <section className="space-y-4">
             <article className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
               <h3 className="font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
                 Draft Rate trend
               </h3>
               <p className="mt-1 text-sm text-slate-500">
-                Compare weekly Draft speed across all file presets.
+                Compare weekly Draft speed across all file presets. Toggle series below; axis is anchored to Combined, outliers may extend above the scale.
               </p>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={draftTrendComparisonRows}>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {DRAFT_TREND_SERIES.map((series) => {
+                  const active = draftTrendVisible[series.preset];
+                  return (
+                    <label
+                      key={`draft-toggle-${series.dataKey}`}
+                      className={`flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                        active
+                          ? "border-slate-300 bg-white text-slate-800 shadow-sm"
+                          : "border-slate-200 bg-slate-50 text-slate-400"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 cursor-pointer accent-slate-900"
+                        checked={active}
+                        onChange={(e) =>
+                          setDraftTrendVisible((prev) => ({
+                            ...prev,
+                            [series.preset]: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span
+                        className="inline-block h-2.5 w-2.5 rounded-full"
+                        style={{
+                          backgroundColor: series.color,
+                          opacity: active ? 1 : 0.35,
+                        }}
+                      />
+                      {series.label}
+                    </label>
+                  );
+                })}
+              </div>
+              <ResponsiveContainer width="100%" height={360}>
+                <LineChart data={draftTrendComparisonRows} margin={{ top: 10, right: 24, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#dbe4f0" />
                   <XAxis dataKey="week" />
-                  <YAxis />
+                  <YAxis domain={draftTrendYDomain} allowDataOverflow />
                   <Tooltip
                     formatter={(value, name) => [
                       value == null ? "-" : formatNumber(value, 0),
@@ -1345,19 +1668,24 @@ export default function PersonProfilePage() {
                   />
                   <Legend />
                   <ReferenceLine y={draftTarget} stroke="#94a3b8" strokeDasharray="4 4" />
-                  {DRAFT_TREND_SERIES.map((series) => (
-                    <Line
-                      key={series.dataKey}
-                      type="monotone"
-                      dataKey={series.dataKey}
-                      name={series.label}
-                      stroke={series.color}
-                      strokeWidth={2.3}
-                      dot={false}
-                      activeDot={{ r: 4 }}
-                      connectNulls={false}
-                    />
-                  ))}
+                  {DRAFT_TREND_SERIES.filter((s) => draftTrendVisible[s.preset]).map((series) => {
+                    const isCombined = series.preset === "combined";
+                    return (
+                      <Line
+                        key={series.dataKey}
+                        type="monotone"
+                        dataKey={series.dataKey}
+                        name={series.label}
+                        stroke={series.color}
+                        strokeWidth={isCombined ? 3.4 : 1.6}
+                        strokeOpacity={isCombined ? 1 : 0.45}
+                        dot={isCombined ? { r: 3, fill: series.color, strokeWidth: 0 } : false}
+                        activeDot={{ r: isCombined ? 6 : 4 }}
+                        connectNulls={false}
+                        isAnimationActive={false}
+                      />
+                    );
+                  })}
                 </LineChart>
               </ResponsiveContainer>
             </article>
@@ -1367,19 +1695,21 @@ export default function PersonProfilePage() {
                 QA Rate trend
               </h3>
               <p className="mt-1 text-sm text-slate-500">Weekly evolution of QA speed.</p>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={trendRows}>
+              <ResponsiveContainer width="100%" height={360}>
+                <LineChart data={trendRows} margin={{ top: 10, right: 24, left: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#dbe4f0" />
                   <XAxis dataKey="week" />
                   <YAxis />
                   <Tooltip />
                   <Legend />
                   <ReferenceLine y={QA_TARGET_MIN} stroke="#94a3b8" strokeDasharray="4 4" />
-                  <Line type="monotone" dataKey="qaRate" name="QA Rate" stroke="#10b981" strokeWidth={2.5} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="qaRate" name="QA Rate" stroke="#10b981" strokeWidth={2.8} dot={{ r: 3 }} />
                 </LineChart>
               </ResponsiveContainer>
             </article>
+          </section>
 
+          <section className="grid gap-4 xl:grid-cols-2">
             <article className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
               <h3 className="font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
                 QER trend
