@@ -1251,9 +1251,13 @@ export default function PersonProfilePage() {
       }
       diag.dateOk += 1;
 
-      // Recompute weekKey from the actual date (Monday-anchored)
+      // Build the SAME composite weekKey the table uses via getWeekKey():
+      //   `${weekLabel}|${firstDay}|${lastDay}`
+      // so the lookup dailyHoursByWeek.get(getWeekKey(row)) succeeds.
       const monday = getMonday(date);
-      const weekKey = monday.toISOString().slice(0, 10);
+      const sunday = getSunday(date);
+      const weekLabel = `Week ${getISOWeek(date)}`;
+      const weekKey = `${weekLabel}|${formatDateLabel(monday)}|${formatDateLabel(sunday)}`;
 
       const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
       const weekdayShortEs = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"][date.getDay()];
