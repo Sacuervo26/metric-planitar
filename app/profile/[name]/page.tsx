@@ -1179,9 +1179,10 @@ export default function PersonProfilePage() {
     >();
     if (!uploadRows.length) return result;
 
+    // Iterate every row where this person appears as Drafter or QA,
+    // regardless of preset. Daily hours are real clocked time, which is
+    // the same no matter which preset bucket the file falls into.
     for (const row of uploadRows) {
-      if (!matchesPreset(row, selectedPreset as PresetMode)) continue;
-
       const drafter = normalizeValue(getField(row, COL_DRAFTER_NAME));
       const qa = normalizeValue(getField(row, COL_QA_NAME));
       const isDrafter = normalizeName(drafter) === normalizedPersonName;
@@ -1252,7 +1253,7 @@ export default function PersonProfilePage() {
     }
 
     return result;
-  }, [uploadRows, normalizedPersonName, selectedPreset, locale]);
+  }, [uploadRows, normalizedPersonName, locale]);
 
   const profileAlertWeekOptions = useMemo(() => {
     const weeks = new Map<
@@ -2016,11 +2017,52 @@ export default function PersonProfilePage() {
                           <tr className="bg-slate-50/70">
                             <td colSpan={8} className="border-b border-slate-200 px-6 py-4">
                               {days.length === 0 ? (
-                                <p className="text-sm text-slate-500">
-                                  {locale.startsWith("en")
-                                    ? "No daily hour records for this week."
-                                    : "No hay registros de horas diarias para esta semana."}
-                                </p>
+                                <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm">
+                                  {uploadRows.length === 0 ? (
+                                    <>
+                                      <p className="font-semibold text-slate-700">
+                                        {locale.startsWith("en")
+                                          ? "Daily breakdown needs row-level data"
+                                          : "El detalle diario necesita datos fila a fila"}
+                                      </p>
+                                      <p className="mt-1 text-slate-500">
+                                        {locale.startsWith("en") ? (
+                                          <>
+                                            Weekly totals come from the cloud snapshot, but daily
+                                            hours are only available on the browser where you
+                                            uploaded the CSVs. Open{" "}
+                                            <Link
+                                              href="/upload"
+                                              className="font-semibold text-blue-700 underline"
+                                            >
+                                              Data Center
+                                            </Link>{" "}
+                                            and reload the CSVs to enable it here.
+                                          </>
+                                        ) : (
+                                          <>
+                                            Los totales semanales vienen del snapshot en la nube,
+                                            pero las horas diarias solo existen en el navegador
+                                            donde subiste los CSV. Abre{" "}
+                                            <Link
+                                              href="/upload"
+                                              className="font-semibold text-blue-700 underline"
+                                            >
+                                              Data Center
+                                            </Link>{" "}
+                                            y vuelve a cargar los CSV para verlas.
+                                          </>
+                                        )}
+                                      </p>
+                                    </>
+                                  ) : (
+                                    <p className="text-slate-500">
+                                      {locale.startsWith("en")
+                                        ? "No daily hour records matched this person and preset for this week."
+                                        : "No se encontraron registros diarios para esta persona y preset en esta semana."}
+                                    </p>
+                                  )}
+                                </div>
                               ) : (
                                 <div>
                                   <div className="flex flex-wrap items-center justify-between gap-2">
