@@ -484,6 +484,17 @@ function getErrorTone(value: number): MetricTone {
   return "rose";
 }
 
+// Weekly hours thresholds:
+// < 28h = below minimum (rose)
+// 28-31.9h = meeting minimum (amber)
+// >= 32h = ideal (emerald)
+function getHoursTone(hours: number): MetricTone {
+  if (hours <= 0) return "slate";
+  if (hours >= 32) return "emerald";
+  if (hours >= 28) return "amber";
+  return "rose";
+}
+
 function renderMetricChip(
   value: unknown,
   decimals: number,
@@ -1102,47 +1113,6 @@ function TeamsPageContent() {
 
   const topDraftRows = useMemo(() => drafterRows.slice(0, 3), [drafterRows]);
   const topQaRows = useMemo(() => qaRows.slice(0, 3), [qaRows]);
-
-  const hoursMetrics = useMemo(() => {
-    const HOURS_MIN = 28;
-    const HOURS_IDEAL = 32;
-    const rows = memberRows
-      .filter((row) => !row.isTeamLead)
-      .map((row) => {
-        const draftHours = toSafeNumber(row.draftHours);
-        const qaHours = toSafeNumber(row.qaHours);
-        const totalHours = draftHours + qaHours;
-        let status: "below" | "meeting" | "ideal" | "empty";
-        if (totalHours <= 0) status = "empty";
-        else if (totalHours < HOURS_MIN) status = "below";
-        else if (totalHours < HOURS_IDEAL) status = "meeting";
-        else status = "ideal";
-        return {
-          name: row.name,
-          team: row.team,
-          role: row.role,
-          draftHours,
-          qaHours,
-          totalHours,
-          status,
-        };
-      })
-      .filter((row) => row.totalHours > 0)
-      .sort((a, b) => a.totalHours - b.totalHours);
-
-    const counts = rows.reduce(
-      (acc, row) => {
-        acc[row.status] += 1;
-        return acc;
-      },
-      { below: 0, meeting: 0, ideal: 0, empty: 0 } as Record<
-        "below" | "meeting" | "ideal" | "empty",
-        number
-      >
-    );
-
-    return { rows, counts, HOURS_MIN, HOURS_IDEAL };
-  }, [memberRows]);
 
   const fileAlerts = useMemo<FileAlertRow[]>(() => {
     if (!alertTeamFilter) return [];
@@ -2009,146 +1979,6 @@ function TeamsPageContent() {
             </section>
           </section>
 
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  {language === "es" ? "Horas trabajadas" : "Hours worked"}
-                </p>
-                <h2 className="mt-1 font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
-                  {language === "es"
-                    ? "Horas por persona (semana activa)"
-                    : "Hours per person (active week)"}
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  {language === "es" ? (
-                    <>
-                      Mínimo <span className="font-semibold text-slate-700">28 h</span> · Ideal{" "}
-                      <span className="font-semibold text-slate-700">32 h</span>. Suma Draft + QA
-                      por persona.
-                    </>
-                  ) : (
-                    <>
-                      Minimum <span className="font-semibold text-slate-700">28 h</span> · Ideal{" "}
-                      <span className="font-semibold text-slate-700">32 h</span>. Sum of Draft + QA
-                      per person.
-                    </>
-                  )}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-600">
-                    {language === "es" ? "Debajo" : "Below"}
-                  </p>
-                  <p className="mt-1 text-2xl font-semibold text-rose-700">
-                    {hoursMetrics.counts.below}
-                  </p>
-                  <p className="text-[10px] text-rose-600">{"< 28h"}</p>
-                </div>
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">
-                    {language === "es" ? "En meta" : "Meeting"}
-                  </p>
-                  <p className="mt-1 text-2xl font-semibold text-amber-700">
-                    {hoursMetrics.counts.meeting}
-                  </p>
-                  <p className="text-[10px] text-amber-700">28 - 31.9h</p>
-                </div>
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
-                    {language === "es" ? "Ideal" : "Ideal"}
-                  </p>
-                  <p className="mt-1 text-2xl font-semibold text-emerald-700">
-                    {hoursMetrics.counts.ideal}
-                  </p>
-                  <p className="text-[10px] text-emerald-700">{"≥ 32h"}</p>
-                </div>
-              </div>
-            </div>
-
-            {hoursMetrics.rows.length === 0 ? (
-              <p className="mt-5 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                {language === "es"
-                  ? "No hay horas registradas en la semana activa."
-                  : "No hours registered in the active week."}
-              </p>
-            ) : (
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {hoursMetrics.rows.map((row) => {
-                  const toneClasses =
-                    row.status === "below"
-                      ? "border-rose-200 bg-rose-50"
-                      : row.status === "meeting"
-                        ? "border-amber-200 bg-amber-50"
-                        : "border-emerald-200 bg-emerald-50";
-                  const valueColor =
-                    row.status === "below"
-                      ? "text-rose-700"
-                      : row.status === "meeting"
-                        ? "text-amber-700"
-                        : "text-emerald-700";
-                  const dotColor =
-                    row.status === "below"
-                      ? "bg-rose-500"
-                      : row.status === "meeting"
-                        ? "bg-amber-500"
-                        : "bg-emerald-500";
-                  const progressPct = Math.min(
-                    100,
-                    Math.round((row.totalHours / hoursMetrics.HOURS_IDEAL) * 100)
-                  );
-                  const progressBar =
-                    row.status === "below"
-                      ? "bg-rose-500"
-                      : row.status === "meeting"
-                        ? "bg-amber-500"
-                        : "bg-emerald-500";
-                  return (
-                    <Link
-                      key={`hours-${row.name}-${row.team}`}
-                      href={`/profile/${encodeURIComponent(row.name)}`}
-                      className={`block rounded-2xl border p-4 transition hover:-translate-y-0.5 hover:shadow-sm ${toneClasses}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-900">
-                            {row.name}
-                          </p>
-                          <p className="text-[11px] font-medium text-slate-500">
-                            {row.team} · {row.role}
-                          </p>
-                        </div>
-                        <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${dotColor}`} />
-                      </div>
-                      <div className="mt-3 flex items-baseline gap-2">
-                        <span className={`text-3xl font-semibold ${valueColor}`}>
-                          {row.totalHours.toFixed(1)}
-                        </span>
-                        <span className="text-xs font-medium text-slate-500">h</span>
-                      </div>
-                      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/70">
-                        <div
-                          className={`h-full ${progressBar}`}
-                          style={{ width: `${progressPct}%` }}
-                        />
-                      </div>
-                      <p className="mt-2 flex items-center justify-between text-[10px] text-slate-500">
-                        <span>
-                          {language === "es" ? "Draft" : "Draft"} {row.draftHours.toFixed(1)}h
-                        </span>
-                        <span>
-                          QA {row.qaHours.toFixed(1)}h
-                        </span>
-                      </p>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-
           <details open className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-2">
               <div>
@@ -2282,7 +2112,9 @@ function TeamsPageContent() {
                         <td className="py-3 pr-4">{formatLevelLabel(row.level)}</td>
                         <td className="py-3 pr-4">{row.targetLabel}</td>
                         <td className="py-3 pr-4">{formatNumber(row.draftFiles, 0)}</td>
-                        <td className="py-3 pr-4">{formatNumber(row.draftHours, 2)}</td>
+                        <td className="py-3 pr-4">
+                          {renderMetricChip(row.draftHours, 2, getHoursTone(row.draftHours))}
+                        </td>
                         <td className="py-3 pr-4">
                           <div className="inline-flex items-center gap-2">
                             <TrendPill delta={trendDelta} />
@@ -2452,7 +2284,9 @@ function TeamsPageContent() {
                         <td className="py-3 pr-4">{formatLevelLabel(row.level)}</td>
                         <td className="py-3 pr-4">{row.targetLabel}</td>
                         <td className="py-3 pr-4">{formatNumber(row.qaFiles, 0)}</td>
-                        <td className="py-3 pr-4">{formatNumber(row.qaHours, 2)}</td>
+                        <td className="py-3 pr-4">
+                          {renderMetricChip(row.qaHours, 2, getHoursTone(row.qaHours))}
+                        </td>
                         <td className="py-3 pr-4">
                           <div className="inline-flex items-center gap-2">
                             <TrendPill delta={trendDelta} />
