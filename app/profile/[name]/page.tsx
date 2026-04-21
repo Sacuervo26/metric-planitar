@@ -1160,10 +1160,10 @@ export default function PersonProfilePage() {
     });
   }, [normalizedPersonName, selectedPreset, teamLabel, uploadRows]);
 
-  // Daily breakdown per week for the selected person + preset.
-  // Returns Map<weekKey, Array<{ dayKey, label, weekday, draftHours, qaHours, totalHours }>>
-  const dailyHoursByWeek = useMemo(() => {
-    const result = new Map<
+  // Daily breakdown per week for the selected person.
+  // Returns { byWeek: Map<weekKey, Map<dayKey, dayData>>, diag: {...} }
+  const dailyHoursResult = useMemo(() => {
+    const byWeek = new Map<
       string,
       Map<
         string,
@@ -1177,22 +1177,32 @@ export default function PersonProfilePage() {
         }
       >
     >();
-    if (!uploadRows.length) return result;
+    const diag = {
+      totalRows: uploadRows.length,
+      matchedRows: 0,
+      dateOk: 0,
+      dateMissing: 0,
+      sampleDrafters: new Set<string>(),
+      sampleQas: new Set<string>(),
+    };
+    if (!uploadRows.length) return { byWeek, diag };
 
     // Iterate every row where this person appears as Drafter or QA,
-    // regardless of preset. Daily hours are real clocked time, which is
-    // the same no matter which preset bucket the file falls into.
+    // regardless of preset. Daily hours are real clocked time.
     for (const row of uploadRows) {
       const drafter = normalizeValue(getField(row, COL_DRAFTER_NAME));
       const qa = normalizeValue(getField(row, COL_QA_NAME));
+      // collect samples for diagnostics (first 10 unique names)
+      if (drafter && diag.sampleDrafters.size < 10) diag.sampleDrafters.add(drafter);
+      if (qa && diag.sampleQas.size < 10) diag.sampleQas.add(qa);
       const isDrafter = normalizeName(drafter) === normalizedPersonName;
       const isQa = normalizeName(qa) === normalizedPersonName;
       if (!isDrafter && !isQa) continue;
 
-      const weekInfo = getWeekInfoFromUploadRow(row);
-      if (weekInfo.weekKey === "unassigned") continue;
+      diag.matchedRows += 1;
 
-      // Pull the date directly (parseDateCandidate logic mirrors getWeekInfoFromUploadRow)
+      // Collect ALL date-like candidates. Loosened: accept any field
+      // whose name contains "date" or "publish", not only exact matches.
       const candidates: string[] = [];
       const pushCandidate = (value?: string) => {
         const n = normalizeValue(value);
@@ -1211,12 +1221,22 @@ export default function PersonProfilePage() {
       for (const [key, value] of Object.entries(row)) {
         const nk = key.toLowerCase().replace(/[^a-z0-9]/g, "");
         if (
-          (nk.includes("publishdate") || nk === "date" || nk.includes("completeddate")) &&
+          (nk.includes("date") || nk.includes("publish") || nk.includes("completed")) &&
           looksLikeDateOrTimestamp(value)
         ) {
           pushCandidate(value);
         }
       }
+      // Last resort: any field whose value parses as a date.
+      if (candidates.length === 0) {
+        for (const value of Object.values(row)) {
+          if (looksLikeDateOrTimestamp(value)) {
+            pushCandidate(value);
+            break;
+          }
+        }
+      }
+
       let date: Date | null = null;
       for (const c of candidates) {
         const d = parseDateCandidate(c);
@@ -1225,14 +1245,22 @@ export default function PersonProfilePage() {
           break;
         }
       }
-      if (!date) continue;
+      if (!date) {
+        diag.dateMissing += 1;
+        continue;
+      }
+      diag.dateOk += 1;
+
+      // Recompute weekKey from the actual date (Monday-anchored)
+      const monday = getMonday(date);
+      const weekKey = monday.toISOString().slice(0, 10);
 
       const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
       const weekdayShortEs = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"][date.getDay()];
       const weekdayShortEn = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getDay()];
 
-      if (!result.has(weekInfo.weekKey)) result.set(weekInfo.weekKey, new Map());
-      const dayMap = result.get(weekInfo.weekKey)!;
+      if (!byWeek.has(weekKey)) byWeek.set(weekKey, new Map());
+      const dayMap = byWeek.get(weekKey)!;
       if (!dayMap.has(dayKey)) {
         dayMap.set(dayKey, {
           dayKey,
@@ -1252,8 +1280,11 @@ export default function PersonProfilePage() {
       if (isQa) day.qaHours += qaHours;
     }
 
-    return result;
+    return { byWeek, diag };
   }, [uploadRows, normalizedPersonName, locale]);
+
+  const dailyHoursByWeek = dailyHoursResult.byWeek;
+  const dailyHoursDiag = dailyHoursResult.diag;
 
   const profileAlertWeekOptions = useMemo(() => {
     const weeks = new Map<
@@ -2056,11 +2087,46 @@ export default function PersonProfilePage() {
                                       </p>
                                     </>
                                   ) : (
-                                    <p className="text-slate-500">
-                                      {locale.startsWith("en")
-                                        ? "No daily hour records matched this person and preset for this week."
-                                        : "No se encontraron registros diarios para esta persona y preset en esta semana."}
-                                    </p>
+                                    <>
+                                      <p className="font-semibold text-slate-700">
+                                        {locale.startsWith("en")
+                                          ? "No daily records matched this week."
+                                          : "No se encontraron registros para esta semana."}
+                                      </p>
+                                      <div className="mt-2 space-y-1 text-xs text-slate-500">
+                                        <p>
+                                          Total rows: <span className="font-semibold text-slate-700">{dailyHoursDiag.totalRows}</span>
+                                          {" · "}
+                                          {locale.startsWith("en") ? "matched for this person" : "matchearon con la persona"}:{" "}
+                                          <span className="font-semibold text-slate-700">{dailyHoursDiag.matchedRows}</span>
+                                          {" · "}
+                                          {locale.startsWith("en") ? "with date" : "con fecha"}:{" "}
+                                          <span className="font-semibold text-slate-700">{dailyHoursDiag.dateOk}</span>
+                                          {" · "}
+                                          {locale.startsWith("en") ? "missing date" : "sin fecha"}:{" "}
+                                          <span className="font-semibold text-slate-700">{dailyHoursDiag.dateMissing}</span>
+                                        </p>
+                                        {dailyHoursDiag.matchedRows === 0 && dailyHoursDiag.totalRows > 0 ? (
+                                          <details className="mt-1">
+                                            <summary className="cursor-pointer text-slate-600">
+                                              {locale.startsWith("en")
+                                                ? "Show sample names found in the CSV"
+                                                : "Ver nombres detectados en el CSV"}
+                                            </summary>
+                                            <div className="mt-1 text-[11px] text-slate-500">
+                                              <p className="font-semibold">Drafters:</p>
+                                              <p>{Array.from(dailyHoursDiag.sampleDrafters).join(", ") || "-"}</p>
+                                              <p className="mt-1 font-semibold">QA:</p>
+                                              <p>{Array.from(dailyHoursDiag.sampleQas).join(", ") || "-"}</p>
+                                              <p className="mt-2 text-slate-600">
+                                                {locale.startsWith("en") ? "Your URL name is: " : "Tu nombre en la URL: "}
+                                                <span className="font-semibold">{personName}</span>
+                                              </p>
+                                            </div>
+                                          </details>
+                                        ) : null}
+                                      </div>
+                                    </>
                                   )}
                                 </div>
                               ) : (
