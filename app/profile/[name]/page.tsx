@@ -1187,6 +1187,12 @@ export default function PersonProfilePage() {
     };
     if (!uploadRows.length) return { byWeek, diag };
 
+    // Deduplicate rows by (fileName, drafter+qa names, hour values) since
+    // uploadRows can accumulate the same batch multiple times when the user
+    // re-uploads CSVs. Counting the same file 60x produces absurd daily
+    // totals (e.g. 275 h in a single day).
+    const seenRowKeys = new Set<string>();
+
     // Iterate every row where this person appears as Drafter or QA,
     // regardless of preset. Daily hours are real clocked time.
     for (const row of uploadRows) {
@@ -1280,6 +1286,16 @@ export default function PersonProfilePage() {
         getField(row, ["Time (h)", "Draft Time (C)", "Draft Time", "Time"])
       );
       const qaHours = parseNumber(getField(row, ["QA Time (D)", "QA Time", "QA Time (h)"]));
+
+      // Dedup key: same file, same day, same role, same hours = same record.
+      const fileName = normalizeValue(
+        getField(row, ["File", "File Name", "Filename", "URL", "Link"])
+      );
+      const roleTag = isDrafter && isQa ? "both" : isDrafter ? "d" : "q";
+      const rowKey = `${fileName}|${dayKey}|${roleTag}|${draftHours}|${qaHours}`;
+      if (seenRowKeys.has(rowKey)) continue;
+      seenRowKeys.add(rowKey);
+
       if (isDrafter) day.draftHours += draftHours;
       if (isQa) day.qaHours += qaHours;
     }
