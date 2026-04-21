@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   CartesianGrid,
@@ -556,6 +556,7 @@ export default function PersonProfilePage() {
   );
   const [peopleSearchQuery, setPeopleSearchQuery] = useState("");
   const [selectedPeoplePods, setSelectedPeoplePods] = useState<string[]>([]);
+  const [expandedWeekKeys, setExpandedWeekKeys] = useState<Set<string>>(new Set());
   const [podsInitialized, setPodsInitialized] = useState(false);
   const [podsDropdownOpen, setPodsDropdownOpen] = useState(false);
   const podsTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1158,6 +1159,100 @@ export default function PersonProfilePage() {
       return a.fileName.localeCompare(b.fileName);
     });
   }, [normalizedPersonName, selectedPreset, teamLabel, uploadRows]);
+
+  // Daily breakdown per week for the selected person + preset.
+  // Returns Map<weekKey, Array<{ dayKey, label, weekday, draftHours, qaHours, totalHours }>>
+  const dailyHoursByWeek = useMemo(() => {
+    const result = new Map<
+      string,
+      Map<
+        string,
+        {
+          dayKey: string;
+          date: Date;
+          label: string;
+          weekday: string;
+          draftHours: number;
+          qaHours: number;
+        }
+      >
+    >();
+    if (!uploadRows.length) return result;
+
+    for (const row of uploadRows) {
+      if (!matchesPreset(row, selectedPreset as PresetMode)) continue;
+
+      const drafter = normalizeValue(getField(row, COL_DRAFTER_NAME));
+      const qa = normalizeValue(getField(row, COL_QA_NAME));
+      const isDrafter = normalizeName(drafter) === normalizedPersonName;
+      const isQa = normalizeName(qa) === normalizedPersonName;
+      if (!isDrafter && !isQa) continue;
+
+      const weekInfo = getWeekInfoFromUploadRow(row);
+      if (weekInfo.weekKey === "unassigned") continue;
+
+      // Pull the date directly (parseDateCandidate logic mirrors getWeekInfoFromUploadRow)
+      const candidates: string[] = [];
+      const pushCandidate = (value?: string) => {
+        const n = normalizeValue(value);
+        if (n) candidates.push(n);
+      };
+      pushCandidate(
+        getField(row, [
+          "Publish Date",
+          "PublishDate",
+          "Date",
+          "Publish date",
+          "Completed Date",
+          "CompletedDate",
+        ])
+      );
+      for (const [key, value] of Object.entries(row)) {
+        const nk = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (
+          (nk.includes("publishdate") || nk === "date" || nk.includes("completeddate")) &&
+          looksLikeDateOrTimestamp(value)
+        ) {
+          pushCandidate(value);
+        }
+      }
+      let date: Date | null = null;
+      for (const c of candidates) {
+        const d = parseDateCandidate(c);
+        if (d) {
+          date = d;
+          break;
+        }
+      }
+      if (!date) continue;
+
+      const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      const weekdayShortEs = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"][date.getDay()];
+      const weekdayShortEn = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getDay()];
+
+      if (!result.has(weekInfo.weekKey)) result.set(weekInfo.weekKey, new Map());
+      const dayMap = result.get(weekInfo.weekKey)!;
+      if (!dayMap.has(dayKey)) {
+        dayMap.set(dayKey, {
+          dayKey,
+          date,
+          label: formatDateLabel(date),
+          weekday: locale.startsWith("en") ? weekdayShortEn : weekdayShortEs,
+          draftHours: 0,
+          qaHours: 0,
+        });
+      }
+      const day = dayMap.get(dayKey)!;
+      const draftHours = parseNumber(
+        getField(row, ["Time (h)", "Draft Time (C)", "Draft Time", "Time"])
+      );
+      const qaHours = parseNumber(getField(row, ["QA Time (D)", "QA Time", "QA Time (h)"]));
+      if (isDrafter) day.draftHours += draftHours;
+      if (isQa) day.qaHours += qaHours;
+    }
+
+    return result;
+  }, [uploadRows, normalizedPersonName, selectedPreset, locale]);
 
   const profileAlertWeekOptions = useMemo(() => {
     const weeks = new Map<
@@ -1831,9 +1926,22 @@ export default function PersonProfilePage() {
                     {personWeeksForPreset.map((row, index) => {
                       const key = getWeekKey(row);
                       const active = key === activeWeekKey;
+                      const expanded = expandedWeekKeys.has(key);
+                      const totalHours =
+                        toSafeNumber(row.draftHours) + toSafeNumber(row.qaHours);
+                      const hoursTone =
+                        totalHours <= 0
+                          ? "bg-slate-100 text-slate-700 ring-slate-200"
+                          : totalHours >= 32
+                            ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
+                            : totalHours >= 28
+                              ? "bg-amber-50 text-amber-800 ring-amber-200"
+                              : "bg-rose-50 text-rose-700 ring-rose-200";
+                      const dayMap = dailyHoursByWeek.get(key);
+                      const days = dayMap ? Array.from(dayMap.values()).sort((a, b) => a.date.getTime() - b.date.getTime()) : [];
                       return (
+                        <React.Fragment key={`history-week-${key}`}>
                         <tr
-                          key={`history-week-${key}`}
                           onClick={() => {
                             setProfileMode("weekly");
                             setSelectedWeekKey(key);
@@ -1848,10 +1956,31 @@ export default function PersonProfilePage() {
                         >
                           <td className="border-b border-slate-100 px-5 py-4">
                             <div className="flex items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedWeekKeys((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(key)) next.delete(key);
+                                    else next.add(key);
+                                    return next;
+                                  });
+                                }}
+                                className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100"
+                                title={expanded ? (locale.startsWith("en") ? "Collapse" : "Colapsar") : (locale.startsWith("en") ? "Show daily hours" : "Ver horas diarias")}
+                                aria-label="toggle daily breakdown"
+                              >
+                                <svg viewBox="0 0 20 20" fill="none" className={`h-3.5 w-3.5 transition ${expanded ? "rotate-180" : ""}`}>
+                                  <path d="m5 7 5 6 5-6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              </button>
                               <span className={`h-2.5 w-2.5 rounded-full ${active ? "bg-blue-600" : "bg-slate-300"}`} />
                               <div>
                                 <p className="font-semibold text-slate-950">{row.weekLabel}</p>
-                                <p className="text-xs text-slate-500">Open week details</p>
+                                <p className="text-xs text-slate-500">
+                                  {locale.startsWith("en") ? "Open week details" : "Abrir detalles de la semana"}
+                                </p>
                               </div>
                             </div>
                           </td>
@@ -1878,11 +2007,82 @@ export default function PersonProfilePage() {
                             </span>
                           </td>
                           <td className="border-b border-slate-100 px-4 py-4">
-                            <span className="inline-flex rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
+                            <span className={`inline-flex rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${hoursTone}`}>
                               {formatNumber(row.draftHours, 2)} / {formatNumber(row.qaHours, 2)}
                             </span>
                           </td>
                         </tr>
+                        {expanded ? (
+                          <tr className="bg-slate-50/70">
+                            <td colSpan={8} className="border-b border-slate-200 px-6 py-4">
+                              {days.length === 0 ? (
+                                <p className="text-sm text-slate-500">
+                                  {locale.startsWith("en")
+                                    ? "No daily hour records for this week."
+                                    : "No hay registros de horas diarias para esta semana."}
+                                </p>
+                              ) : (
+                                <div>
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                      {locale.startsWith("en") ? "Daily hours" : "Horas diarias"}
+                                    </p>
+                                    <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
+                                      <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700 ring-1 ring-blue-200">
+                                        Draft {formatNumber(days.reduce((s, d) => s + d.draftHours, 0), 2)}h
+                                      </span>
+                                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700 ring-1 ring-emerald-200">
+                                        QA {formatNumber(days.reduce((s, d) => s + d.qaHours, 0), 2)}h
+                                      </span>
+                                      <span className={`rounded-full px-2.5 py-1 ring-1 ${hoursTone}`}>
+                                        {locale.startsWith("en") ? "Total" : "Total"}{" "}
+                                        {formatNumber(
+                                          days.reduce((s, d) => s + d.draftHours + d.qaHours, 0),
+                                          2
+                                        )}
+                                        h
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="mt-3 grid gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+                                    {days.map((d) => {
+                                      const total = d.draftHours + d.qaHours;
+                                      const tone =
+                                        total <= 0
+                                          ? "border-slate-200 bg-white"
+                                          : total >= 8
+                                            ? "border-emerald-200 bg-emerald-50"
+                                            : total >= 6
+                                              ? "border-amber-200 bg-amber-50"
+                                              : "border-rose-200 bg-rose-50";
+                                      return (
+                                        <div
+                                          key={`day-${key}-${d.dayKey}`}
+                                          className={`rounded-2xl border p-3 ${tone}`}
+                                        >
+                                          <div className="flex items-baseline justify-between gap-2">
+                                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                              {d.weekday}
+                                            </p>
+                                            <p className="text-[11px] text-slate-500">{d.label}</p>
+                                          </div>
+                                          <p className="mt-1 text-xl font-semibold text-slate-900">
+                                            {formatNumber(total, 2)}
+                                            <span className="ml-1 text-xs font-medium text-slate-500">h</span>
+                                          </p>
+                                          <p className="mt-1 text-[11px] text-slate-600">
+                                            Draft {formatNumber(d.draftHours, 2)} · QA {formatNumber(d.qaHours, 2)}
+                                          </p>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ) : null}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
