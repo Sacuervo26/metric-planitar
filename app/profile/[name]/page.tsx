@@ -1182,6 +1182,7 @@ export default function PersonProfilePage() {
       matchedRows: 0,
       dateOk: 0,
       dateMissing: 0,
+      afterDedup: 0,
       sampleDrafters: new Set<string>(),
       sampleQas: new Set<string>(),
     };
@@ -1287,14 +1288,24 @@ export default function PersonProfilePage() {
       );
       const qaHours = parseNumber(getField(row, ["QA Time (D)", "QA Time", "QA Time (h)"]));
 
-      // Dedup key: same file, same day, same role, same hours = same record.
+      // Dedup: find ANY stable identifier for the row. Prefer a file URL
+      // or id, then fall back to stringifying the full row. Then scope by
+      // day + role so a file that appears as drafter AND qa counts both.
       const fileName = normalizeValue(
         getField(row, ["File", "File Name", "Filename", "URL", "Link"])
       );
+      const rowSignature =
+        fileName ||
+        JSON.stringify(
+          Object.keys(row)
+            .sort()
+            .map((k) => [k, row[k]])
+        );
       const roleTag = isDrafter && isQa ? "both" : isDrafter ? "d" : "q";
-      const rowKey = `${fileName}|${dayKey}|${roleTag}|${draftHours}|${qaHours}`;
+      const rowKey = `${rowSignature}|${dayKey}|${roleTag}`;
       if (seenRowKeys.has(rowKey)) continue;
       seenRowKeys.add(rowKey);
+      diag.afterDedup += 1;
 
       if (isDrafter) day.draftHours += draftHours;
       if (isQa) day.qaHours += qaHours;
@@ -2119,6 +2130,9 @@ export default function PersonProfilePage() {
                                           {" · "}
                                           {locale.startsWith("en") ? "matched for this person" : "matchearon con la persona"}:{" "}
                                           <span className="font-semibold text-slate-700">{dailyHoursDiag.matchedRows}</span>
+                                          {" · "}
+                                          {locale.startsWith("en") ? "after dedup" : "tras dedup"}:{" "}
+                                          <span className="font-semibold text-slate-700">{dailyHoursDiag.afterDedup}</span>
                                           {" · "}
                                           {locale.startsWith("en") ? "with date" : "con fecha"}:{" "}
                                           <span className="font-semibold text-slate-700">{dailyHoursDiag.dateOk}</span>
