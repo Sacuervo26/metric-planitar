@@ -479,6 +479,27 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         </div>
 
         <div
+          className={`mt-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 transition-all duration-300 ${
+            collapsed ? "px-2 py-3" : ""
+          }`}
+          title={collapsed ? (language === "es" ? "Jefe: David Rodriguez" : "Boss: David Rodriguez") : undefined}
+        >
+          {!collapsed ? (
+            <>
+              <p className="text-xs uppercase tracking-wider text-amber-700">
+                {language === "es" ? "Jefe" : "Boss"}
+              </p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">David Rodriguez</p>
+              <p className="text-xs text-amber-800/80">
+                {language === "es" ? "Liderazgo" : "Leadership"}
+              </p>
+            </>
+          ) : (
+            <div className="grid place-items-center text-xs font-semibold text-amber-700">DR</div>
+          )}
+        </div>
+
+        <div
           className={`mt-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 transition-all duration-300 ${
             collapsed ? "px-2 py-3" : ""
           }`}
