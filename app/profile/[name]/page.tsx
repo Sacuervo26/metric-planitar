@@ -2001,7 +2001,24 @@ export default function PersonProfilePage() {
                               ? "bg-amber-50 text-amber-800 ring-amber-200"
                               : "bg-rose-50 text-rose-700 ring-rose-200";
                       const dayMap = dailyHoursByWeek.get(key);
-                      const days = dayMap ? Array.from(dayMap.values()).sort((a, b) => a.date.getTime() - b.date.getTime()) : [];
+                      const rawDays = dayMap ? Array.from(dayMap.values()).sort((a, b) => a.date.getTime() - b.date.getTime()) : [];
+                      // Scale the per-day values so the sum matches the
+                      // authoritative weekly total from the snapshot. This
+                      // corrects for any duplication in uploadRows (e.g. the
+                      // same batch uploaded multiple times) because the shape
+                      // stays the same — each day gets its proportional share
+                      // of the true weekly total.
+                      const rawDraftSum = rawDays.reduce((s, d) => s + d.draftHours, 0);
+                      const rawQaSum = rawDays.reduce((s, d) => s + d.qaHours, 0);
+                      const trueDraft = toSafeNumber(row.draftHours);
+                      const trueQa = toSafeNumber(row.qaHours);
+                      const draftScale = rawDraftSum > 0 ? trueDraft / rawDraftSum : 0;
+                      const qaScale = rawQaSum > 0 ? trueQa / rawQaSum : 0;
+                      const days = rawDays.map((d) => ({
+                        ...d,
+                        draftHours: d.draftHours * draftScale,
+                        qaHours: d.qaHours * qaScale,
+                      }));
                       return (
                         <React.Fragment key={`history-week-${key}`}>
                         <tr
