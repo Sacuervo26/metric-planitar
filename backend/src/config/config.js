@@ -4,9 +4,12 @@ const path = require("path");
 const dialect = process.env.DB_DIALECT || "sqlite";
 
 function sqliteConfig() {
+  const defaultStorage = path.resolve(__dirname, "..", "..", "data", "metric-planitar.sqlite");
   return {
     dialect: "sqlite",
-    storage: process.env.DB_STORAGE || path.resolve("data/metric-planitar.sqlite"),
+    storage: process.env.DB_STORAGE
+      ? path.resolve(process.env.DB_STORAGE)
+      : defaultStorage,
     logging: false,
   };
 }

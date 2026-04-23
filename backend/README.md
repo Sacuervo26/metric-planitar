@@ -1,6 +1,7 @@
 # metric-planitar backend
 
-Mini backend Express + Sequelize que reemplaza `app/api/cloud-state/route.ts`.
+Backend Express + Sequelize que persiste el estado del dashboard
+(snapshots históricos + batches de CSV) para múltiples usuarios.
 
 ## Setup
 
@@ -55,11 +56,12 @@ Los modelos detectan el dialecto automáticamente y eligen la columna correcta.
 
 ## Endpoints
 
-- `GET  /health` → `{ ok: true }` (público)
-- `GET  /cloud-state` → `{ configured, state }` (protegido)
-- `POST /cloud-state` (body: `RemoteDashboardState` JSON, validado con zod) → `{ configured, state }` (protegido)
-- `GET  /snapshots?limit=N&offset=M` → `{ total, limit, offset, items: [...] }` (protegido, paginado, `limit` máx 100)
-- `GET  /snapshots/:id` → snapshot completo con `teams`, `weeklyRows`, `presetDistribution` (protegido, 404 si no existe)
+- `GET    /health` → `{ ok: true }` (público)
+- `GET    /cloud-state` → `{ configured, state }` (protegido)
+- `POST   /cloud-state` (body: `RemoteDashboardState` JSON, validado con zod) → `{ configured, state }` (protegido). **Append-only** para snapshots; **upsert por id** para batches (no borra los que falten en el payload).
+- `DELETE /cloud-state/batches/:id` → `{ ok: true, id }` o `404`. Borra un batch y sus rows (cascade). (protegido)
+- `GET    /snapshots?limit=N&offset=M` → `{ total, limit, offset, items: [...] }` (protegido, paginado, `limit` máx 100)
+- `GET    /snapshots/:id` → snapshot completo con `teams`, `weeklyRows`, `presetDistribution` (protegido, 404 si no existe)
 
 Formato compatible con el frontend actual (`lib/store/remote-dashboard-state.ts`).
 
@@ -111,19 +113,36 @@ con CORS restringido es aceptable; para público, migrar a login + JWT.
 
 Cada POST crea un nuevo `Snapshot`. `GET` devuelve el más reciente por `updatedAt`.
 
-### Upload batches (replace-wholesale)
+### Upload batches (upsert por id)
 - `upload_batches(id, region, fileName, uploadedAt, rowCount)`
 - `upload_rows(id, batchId, rowIndex, data JSON)` — una fila CSV por registro
 
-Cada POST borra todos los batches y los recrea (mismas semánticas que el JSON blob original).
+Cada POST hace **upsert** de los batches que recibe (por `id`). Los batches que
+NO están en el payload se conservan — esto evita que usuarios concurrentes se
+pisen los uploads. Para borrar un batch hay que usar `DELETE /cloud-state/batches/:id`
+explícitamente. El frontend actual no llama este endpoint todavía, así que una
+eliminación desde el UI queda solo local hasta que se implemente.
 
 ### Campos JSON
 En Postgres/MySQL son `JSONB`/`JSON` nativos. En SQLite se serializan como `TEXT`
 (manejado por el helper [src/models/\_jsonColumn.js](src/models/_jsonColumn.js)).
 
+## Consideraciones multi-usuario (conocidas)
+
+- **Snapshots**: cada POST crea una fila nueva → no hay pérdida. `GET /cloud-state`
+  devuelve el más reciente; si dos personas generan snapshot casi al mismo tiempo,
+  solo una queda como "último" (pero ambas quedan en el histórico de `/snapshots`).
+- **Batches**: upsert por id evita pérdida de datos, pero si dos personas editan
+  el mismo batch con diferente contenido, gana el último POST (sus rows reemplazan
+  las anteriores).
+- **Sin usuarios**: hoy todos comparten una sola `API_KEY`. No hay separación por
+  persona. Si eso importa, añadir tabla `users` + JWT + `userId` en UploadBatch y
+  Snapshot.
+
 ## Próximos pasos sugeridos
 
-- Endpoint `GET /snapshots` y `GET /snapshots/:id` para explorar el histórico
-- Auth (JWT) + multiusuario (añadir `userId` a Snapshot y UploadBatch)
-- Índice compuesto `(region, uploadedAt)` para paginar batches
-- Migrar a `sequelize-cli` con migraciones versionadas en vez de `sync()`
+- Login con JWT + tabla `users` para saber quién subió qué
+- Actualizar frontend para llamar `DELETE /cloud-state/batches/:id` cuando el usuario
+  quita un batch en el UI (hoy solo borra de localStorage)
+- Índice compuesto `(region, uploadedAt)` si `upload_batches` crece
+- Estructurar logs con `pino` o `winston` (hoy solo `console.error`)

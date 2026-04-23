@@ -197,15 +197,14 @@ router.post("/", validateCloudState, async (req, res, next) => {
       }
     }
 
-    // Replace batches wholesale — mirrors current JSON-blob semantics.
-    await UploadRow.destroy({ where: {}, transaction: t, truncate: false });
-    await UploadBatch.destroy({ where: {}, transaction: t, truncate: false });
-
+    // Upsert batches by id; do NOT delete batches missing from payload.
+    // This keeps concurrent users' uploads from wiping each other out
+    // (last-writer-wins race). To remove a batch, use DELETE /cloud-state/batches/:id.
     const batches = payload.batches || {};
     for (const region of REGIONS) {
       const list = Array.isArray(batches[region]) ? batches[region] : [];
       for (const batch of list) {
-        await UploadBatch.create(
+        await UploadBatch.upsert(
           {
             id: batch.id,
             region,
@@ -215,6 +214,11 @@ router.post("/", validateCloudState, async (req, res, next) => {
           },
           { transaction: t }
         );
+        // Replace the rows for this batch only (not global).
+        await UploadRow.destroy({
+          where: { batchId: batch.id },
+          transaction: t,
+        });
         if (Array.isArray(batch.rows) && batch.rows.length) {
           await UploadRow.bulkCreate(
             batch.rows.map((data, rowIndex) => ({
@@ -259,6 +263,21 @@ router.post("/", validateCloudState, async (req, res, next) => {
           : new Date().toISOString(),
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/batches/:id", async (req, res, next) => {
+  try {
+    const id = String(req.params.id || "");
+    if (!id) return res.status(400).json({ error: "Invalid batch id" });
+
+    const removed = await UploadBatch.destroy({ where: { id } });
+    if (removed === 0) {
+      return res.status(404).json({ error: "Batch not found" });
+    }
+    res.json({ ok: true, id });
   } catch (err) {
     next(err);
   }

@@ -7,7 +7,10 @@ const dialect = process.env.DB_DIALECT || "sqlite";
 let sequelize;
 
 if (dialect === "sqlite") {
-  const storage = process.env.DB_STORAGE || "./data/metric-planitar.sqlite";
+  const defaultStorage = path.resolve(__dirname, "..", "data", "metric-planitar.sqlite");
+  const storage = process.env.DB_STORAGE
+    ? path.resolve(process.env.DB_STORAGE)
+    : defaultStorage;
   const dir = path.dirname(storage);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
