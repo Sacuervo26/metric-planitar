@@ -1832,12 +1832,33 @@ function TeamsPageContent() {
       <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
         <div className="rounded-3xl bg-[linear-gradient(110deg,#fde68a_0%,#bfdbfe_45%,#fecaca_100%)] p-[1px]">
           <div className="rounded-[22px] bg-white/95 px-7 py-8 backdrop-blur">
-            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-              {t("Teams Intelligence", "Inteligencia de equipos")}
-            </p>
-            <h1 className="mt-2 font-[var(--font-space-grotesk)] text-4xl font-semibold tracking-tight text-slate-900">
-              {t("Team operational comparisons", "Comparativos operativos por equipo")}
-            </h1>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                  {t("Teams Intelligence", "Inteligencia de equipos")}
+                </p>
+                <h1 className="mt-2 font-[var(--font-space-grotesk)] text-4xl font-semibold tracking-tight text-slate-900">
+                  {t("Team operational comparisons", "Comparativos operativos por equipo")}
+                </h1>
+              </div>
+              <Link
+                href={`/teams/report${activePodSelection.length > 0 ? `?pods=${activePodSelection.join(",")}` : ""}`}
+                target="_blank"
+                rel="noopener"
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+              >
+                <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+                  <path
+                    d="M14 3v4a1 1 0 0 0 1 1h4M5 4a1 1 0 0 1 1-1h8l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                {t("Reporte", "Report")}
+              </Link>
+            </div>
 
             <div className="mt-6 grid gap-3 xl:grid-cols-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 xl:col-span-4">
