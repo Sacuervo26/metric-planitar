@@ -1175,10 +1175,61 @@ export default function PersonProfilePage() {
     );
   }, [normalizedPersonName, weeklyByPreset]);
 
-  const personWeeksForPreset = useMemo<WeeklyMemberRow[]>(
-    () => weeklyRowsByPreset[selectedPreset] ?? [],
-    [selectedPreset, weeklyRowsByPreset]
-  );
+  // All weeks present in the snapshot for the selected preset, taken from
+  // weeklyTeamsByPreset so we know every week the system tracked — even if
+  // this person had 0 activity that week (e.g. on vacation the whole week).
+  const allWeeksInSnapshot = useMemo(() => {
+    const map = new Map<
+      string,
+      { weekKey: string; weekLabel: string; firstDay: string; lastDay: string; sortKey: number }
+    >();
+    const teamsByPreset = snapshot?.weeklyTeamsByPreset ?? {};
+    const source =
+      teamsByPreset[selectedPreset] ??
+      teamsByPreset.combined ??
+      [];
+    for (const row of source) {
+      const key = `${row.weekLabel}|${row.firstDay}|${row.lastDay}`;
+      if (map.has(key)) continue;
+      map.set(key, {
+        weekKey: key,
+        weekLabel: row.weekLabel,
+        firstDay: row.firstDay,
+        lastDay: row.lastDay,
+        sortKey: parseFirstDayToTime(row.firstDay),
+      });
+    }
+    return Array.from(map.values()).sort((a, b) => a.sortKey - b.sortKey);
+  }, [snapshot?.weeklyTeamsByPreset, selectedPreset]);
+
+  const personWeeksForPreset = useMemo<WeeklyMemberRow[]>(() => {
+    const rows = weeklyRowsByPreset[selectedPreset] ?? [];
+    if (allWeeksInSnapshot.length === 0) return rows;
+    const existing = new Map(rows.map((r) => [getWeekKey(r), r]));
+    const team = rows[0]?.team ?? "";
+    const filled: WeeklyMemberRow[] = allWeeksInSnapshot.map((w) => {
+      const have = existing.get(w.weekKey);
+      if (have) return have;
+      return {
+        team,
+        name: personName,
+        weekLabel: w.weekLabel,
+        firstDay: w.firstDay,
+        lastDay: w.lastDay,
+        draftFiles: 0,
+        draftHours: 0,
+        draftRate: 0,
+        qaFiles: 0,
+        qaHours: 0,
+        qaRate: 0,
+        qer: 0,
+        l1: 0,
+        l2: 0,
+        l3: 0,
+      };
+    });
+    return filled;
+  }, [allWeeksInSnapshot, weeklyRowsByPreset, selectedPreset, personName]);
 
   const latestWeekKey = useMemo(
     () =>
