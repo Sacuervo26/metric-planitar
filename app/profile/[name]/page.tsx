@@ -2650,6 +2650,8 @@ export default function PersonProfilePage() {
                       <th className="px-4 py-4">QER</th>
                       <th className="px-4 py-4">Files D / QA</th>
                       <th className="px-4 py-4">Hours D / QA</th>
+                      <th className="px-4 py-4">Adicionales</th>
+                      <th className="px-4 py-4">Total</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white">
@@ -2691,6 +2693,7 @@ export default function PersonProfilePage() {
                       // and no schedule event. Also collect events for the
                       // week-level badge summary.
                       const weekEventsByCode = new Map<string, { label: string; tone: string; count: number }>();
+                      let weekAdicionales = 0;
                       const monday = parseDateCandidate(row.firstDay);
                       const sunday = parseDateCandidate(row.lastDay);
                       if (monday && sunday) {
@@ -2712,6 +2715,10 @@ export default function PersonProfilePage() {
                               });
                             }
                           }
+                          const adj = adjustmentsByDate.get(dayKey);
+                          if (adj && adj.additionalHours > 0) {
+                            weekAdicionales += adj.additionalHours;
+                          }
                           if (existingDayKeys.has(dayKey)) continue;
                           const weekday = date.getDay();
                           const weekdayShortEs = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"][weekday];
@@ -2728,6 +2735,7 @@ export default function PersonProfilePage() {
                         days.sort((a, b) => a.date.getTime() - b.date.getTime());
                       }
                       const weekEventBadges = Array.from(weekEventsByCode.values()).sort((a, b) => b.count - a.count);
+                      const totalWithAdicionales = totalHours + weekAdicionales;
                       return (
                         <React.Fragment key={`history-week-${key}`}>
                         <tr
@@ -2815,10 +2823,24 @@ export default function PersonProfilePage() {
                               {formatNumber(row.draftHours, 2)} / {formatNumber(row.qaHours, 2)}
                             </span>
                           </td>
+                          <td className="border-b border-slate-100 px-4 py-4">
+                            {weekAdicionales > 0 ? (
+                              <span className="inline-flex rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-amber-200">
+                                +{formatNumber(weekAdicionales, 2)}h
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-300">—</span>
+                            )}
+                          </td>
+                          <td className="border-b border-slate-100 px-4 py-4">
+                            <span className={`inline-flex rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${hoursTone}`}>
+                              {formatNumber(totalWithAdicionales, 2)}h
+                            </span>
+                          </td>
                         </tr>
                         {expanded ? (
                           <tr className="bg-slate-50/70">
-                            <td colSpan={8} className="border-b border-slate-200 px-6 py-4">
+                            <td colSpan={10} className="border-b border-slate-200 px-6 py-4">
                               {days.length === 0 ? (
                                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm">
                                   {uploadRows.length === 0 ? (
