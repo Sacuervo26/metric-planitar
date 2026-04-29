@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -734,7 +734,7 @@ export default function HomePage() {
     });
   }, [weeklyTeamRowsRaw]);
 
-  const activeCountrySelection = useMemo(
+  const popoverCountrySelection = useMemo(
     () => {
       const valid = new Set(countryOptions.map((option) => option.value));
       const base = selectedCountries ?? countryOptions.map((option) => option.value);
@@ -742,13 +742,33 @@ export default function HomePage() {
     },
     [countryOptions, selectedCountries]
   );
-  const activePodSelection = useMemo(
+  const popoverPodSelection = useMemo(
     () => {
       const valid = new Set(podOptions.map((option) => option.value));
       const base = selectedPods ?? podOptions.map((option) => option.value);
       return base.filter((value) => valid.has(value));
     },
     [podOptions, selectedPods]
+  );
+
+  const deferredSelectedCountries = useDeferredValue(selectedCountries);
+  const deferredSelectedPods = useDeferredValue(selectedPods);
+
+  const activeCountrySelection = useMemo(
+    () => {
+      const valid = new Set(countryOptions.map((option) => option.value));
+      const base = deferredSelectedCountries ?? countryOptions.map((option) => option.value);
+      return base.filter((value) => valid.has(value));
+    },
+    [countryOptions, deferredSelectedCountries]
+  );
+  const activePodSelection = useMemo(
+    () => {
+      const valid = new Set(podOptions.map((option) => option.value));
+      const base = deferredSelectedPods ?? podOptions.map((option) => option.value);
+      return base.filter((value) => valid.has(value));
+    },
+    [podOptions, deferredSelectedPods]
   );
 
   const selectedCountrySet = useMemo(
@@ -1306,7 +1326,7 @@ export default function HomePage() {
                   label={groupMode === "country" ? "Countries" : "Pods"}
                   options={groupMode === "country" ? countryOptions : podOptions}
                   selectedValues={
-                    groupMode === "country" ? activeCountrySelection : activePodSelection
+                    groupMode === "country" ? popoverCountrySelection : popoverPodSelection
                   }
                   onChange={(values) => {
                     if (groupMode === "country") {

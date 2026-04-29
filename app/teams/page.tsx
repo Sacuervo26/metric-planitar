@@ -5,8 +5,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   Suspense,
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -521,6 +523,150 @@ function ChevronDownIcon({ className = "h-4 w-4" }: { className?: string }) {
   );
 }
 
+type MultiSelectOption = {
+  value: string;
+  label: string;
+  helper?: string;
+};
+
+function PodMultiSelectPopover({
+  label,
+  options,
+  selectedValues,
+  onChange,
+  emptyMessage,
+}: {
+  label: string;
+  options: MultiSelectOption[];
+  selectedValues: string[];
+  onChange: (values: string[]) => void;
+  emptyMessage: string;
+}) {
+  const { language } = useAppLanguage();
+  const isSpanish = language === "es";
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const allSelected = options.length > 0 && selectedValues.length === options.length;
+  const summary =
+    selectedValues.length === 0
+      ? isSpanish
+        ? "Sin seleccion"
+        : "No selection"
+      : allSelected
+        ? isSpanish
+          ? `Todos (${options.length})`
+          : `All (${options.length})`
+        : selectedValues.length === 1
+          ? selectedValues[0]
+          : `${selectedValues.length} ${isSpanish ? "seleccionados" : "selected"}`;
+
+  useEffect(() => {
+    function handleOutsideClick(event: MouseEvent) {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    if (open) {
+      window.addEventListener("mousedown", handleOutsideClick);
+    }
+
+    return () => {
+      window.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left transition ${
+          open
+            ? "border-blue-300 bg-white shadow-md shadow-blue-100/60"
+            : "border-slate-300 bg-white hover:border-slate-400"
+        }`}
+      >
+        <span className="text-sm font-medium text-slate-900 truncate">{summary}</span>
+        <span className="ml-3 flex items-center gap-2 text-slate-500">
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+            {selectedValues.length}/{options.length}
+          </span>
+          <ChevronDownIcon />
+        </span>
+      </button>
+
+      {open ? (
+        <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl shadow-slate-200/70">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold text-slate-700">{label}</p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onChange(options.map((option) => option.value))}
+                className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
+              >
+                {isSpanish ? "Seleccionar todo" : "Select all"}
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-200"
+              >
+                {isSpanish ? "Limpiar todo" : "Clear all"}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 max-h-64 space-y-1.5 overflow-auto pr-1">
+            {options.length > 0 ? (
+              options.map((option) => {
+                const checked = selectedValues.includes(option.value);
+                return (
+                  <label
+                    key={`${label}-${option.value}`}
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 transition ${
+                      checked
+                        ? "border-blue-200 bg-blue-50/70"
+                        : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() =>
+                        onChange(
+                          checked
+                            ? selectedValues.filter((value) => value !== option.value)
+                            : [...selectedValues, option.value]
+                        )
+                      }
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-slate-900">
+                        {option.label}
+                      </span>
+                      {option.helper ? (
+                        <span className="block text-xs text-slate-500">{option.helper}</span>
+                      ) : null}
+                    </span>
+                  </label>
+                );
+              })
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                {emptyMessage}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SortHeaderButton({
   label,
   active,
@@ -550,28 +696,6 @@ function SortHeaderButton({
         {direction === "asc" ? "↑" : "↓"}
       </span>
     </button>
-  );
-}
-
-function TrendPill({ delta }: { delta: number }) {
-  if (Math.abs(delta) < 0.001) {
-    return (
-      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
-        FLAT
-      </span>
-    );
-  }
-  if (delta > 0) {
-    return (
-      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
-        UP
-      </span>
-    );
-  }
-  return (
-    <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-rose-200">
-      DOWN
-    </span>
   );
 }
 
@@ -665,7 +789,6 @@ function TeamsPageContent() {
   const t = (en: string, es: string) => (isSpanish ? es : en);
   const personConfig = usePersonConfigStore();
   const [selectedPreset, setSelectedPreset] = useState<SnapshotPresetMode>("combined");
-  const [selectedTeam, setSelectedTeam] = useState<TeamFilter>("all");
   const [selectedRankingMode, setSelectedRankingMode] = useState<RankingMode>("weekly");
   const [selectedWeekKey, setSelectedWeekKey] = useState<"latest" | string>("latest");
   const [selectedHistoryWeekKey, setSelectedHistoryWeekKey] = useState<string | null>(
@@ -679,6 +802,7 @@ function TeamsPageContent() {
     key: "qaRate",
     direction: "desc",
   });
+  const [selectedPods, setSelectedPods] = useState<string[] | null>(null);
   const [uploadRows, setUploadRows] = useState<CsvRow[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(true);
   const [selectedAlertTeam, setSelectedAlertTeam] = useState<TeamFilter>("all");
@@ -705,10 +829,35 @@ function TeamsPageContent() {
     return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [snapshot?.teamMembersByPreset, snapshot?.weeklyTeamsByPreset]);
 
+  const popoverPodSelection = useMemo(() => {
+    if (teamOptions.length === 0) return [] as string[];
+    const valid = new Set(teamOptions);
+    const base = selectedPods ?? teamOptions;
+    return base.filter((value) => valid.has(value));
+  }, [selectedPods, teamOptions]);
+
+  const deferredSelectedPods = useDeferredValue(selectedPods);
+
+  const activePodSelection = useMemo(() => {
+    if (teamOptions.length === 0) return [] as string[];
+    const valid = new Set(teamOptions);
+    const base = deferredSelectedPods ?? teamOptions;
+    return base.filter((value) => valid.has(value));
+  }, [deferredSelectedPods, teamOptions]);
+
+  const allPodsSelected =
+    teamOptions.length > 0 && activePodSelection.length === teamOptions.length;
+
+  const selectedTeam: TeamFilter = useMemo(() => {
+    if (allPodsSelected || activePodSelection.length === 0) return "all";
+    if (activePodSelection.length === 1) return activePodSelection[0];
+    return "all";
+  }, [activePodSelection, allPodsSelected]);
+
   useEffect(() => {
     const teamParam = (searchParams.get("team") ?? "").trim().toUpperCase();
     if (teamParam && (teamOptions.includes(teamParam) || isRrePodTeam(teamParam))) {
-      setSelectedTeam(teamParam);
+      setSelectedPods([teamParam]);
     }
     const fileParam = decodeURIComponent(searchParams.get("file") ?? "").trim();
     if (fileParam) {
@@ -718,10 +867,13 @@ function TeamsPageContent() {
   }, [searchParams, teamOptions]);
 
   useEffect(() => {
-    if (selectedTeam !== "all" && teamOptions.length > 0 && !teamOptions.includes(selectedTeam)) {
-      setSelectedTeam("all");
+    if (selectedPods === null || teamOptions.length === 0) return;
+    const valid = new Set(teamOptions);
+    const filtered = selectedPods.filter((value) => valid.has(value));
+    if (filtered.length !== selectedPods.length) {
+      setSelectedPods(filtered);
     }
-  }, [selectedTeam, teamOptions]);
+  }, [selectedPods, teamOptions]);
 
   useEffect(() => {
     setSelectedAlertTeam(selectedTeam);
@@ -768,14 +920,17 @@ function TeamsPageContent() {
     return map;
   }, [personConfig]);
 
-  const teamFilter = selectedTeam === "all" ? null : selectedTeam;
+  const teamFilterSet = useMemo<Set<string> | null>(() => {
+    if (allPodsSelected) return null;
+    return new Set(activePodSelection);
+  }, [activePodSelection, allPodsSelected]);
   const alertTeamFilter = selectedAlertTeam === "all" ? null : selectedAlertTeam;
   const leaderTeams = useMemo(() => {
     const teams = Object.keys(TEAM_LEADERS).filter((team) =>
       teamOptions.includes(team)
     );
-    return teams.filter((team) => (!teamFilter ? true : team === teamFilter));
-  }, [teamFilter, teamOptions]);
+    return teams.filter((team) => (!teamFilterSet ? true : teamFilterSet.has(team)));
+  }, [teamFilterSet, teamOptions]);
 
   const mapMemberRow = useCallback(
     (row: TeamMemberWeeklyRow): MemberViewRow => {
@@ -822,7 +977,7 @@ function TeamsPageContent() {
     const fallback = snapshot?.weeklyTeamsByPreset?.combined ?? [];
     const source = fromPreset.length > 0 ? fromPreset : fallback;
     const scoped = source.filter(
-      (row) => isRrePodTeam(row.team) && (!teamFilter || row.team === teamFilter)
+      (row) => isRrePodTeam(row.team) && (!teamFilterSet || teamFilterSet.has(row.team))
     );
 
     const map = new Map<
@@ -891,16 +1046,16 @@ function TeamsPageContent() {
       .sort(
         (a, b) => parseFirstDayToTime(a.firstDay) - parseFirstDayToTime(b.firstDay)
       );
-  }, [selectedPreset, snapshot, teamFilter]);
+  }, [selectedPreset, snapshot, teamFilterSet]);
 
   const weeklyTeamRowsForPreset = useMemo(() => {
     const fromPreset = snapshot?.weeklyTeamsByPreset?.[selectedPreset] ?? [];
     const fallback = snapshot?.weeklyTeamsByPreset?.combined ?? [];
     const source = fromPreset.length > 0 ? fromPreset : fallback;
     return source.filter(
-      (row) => isRrePodTeam(row.team) && (!teamFilter || row.team === teamFilter)
+      (row) => isRrePodTeam(row.team) && (!teamFilterSet || teamFilterSet.has(row.team))
     );
-  }, [selectedPreset, snapshot, teamFilter]);
+  }, [selectedPreset, snapshot, teamFilterSet]);
 
   const latestWeekKey = useMemo(
     () => (weeklyRows.length === 0 ? null : getWeekKey(weeklyRows[weeklyRows.length - 1])),
@@ -935,8 +1090,8 @@ function TeamsPageContent() {
     const source = fromPreset.length > 0 ? fromPreset : fallback;
     return source
       .filter((row) => isRrePodTeam(row.team))
-      .filter((row) => (!teamFilter ? true : row.team === teamFilter));
-  }, [selectedPreset, snapshot, teamFilter]);
+      .filter((row) => (!teamFilterSet ? true : teamFilterSet.has(row.team)));
+  }, [selectedPreset, snapshot, teamFilterSet]);
 
   const memberRows = useMemo<MemberViewRow[]>(() => {
     if (!activeWeekKey) return [];
@@ -1034,38 +1189,6 @@ function TeamsPageContent() {
 
   const rankingMemberRows = selectedRankingMode === "weekly" ? memberRows : globalMemberRows;
 
-  const draftTrendByName = useMemo(() => {
-    const trendMap = new Map<string, number>();
-    if (!activeWeekKey || !previousWeekRow) return trendMap;
-
-    const currentRows = weeklyMemberRows.filter((row) => getWeekKey(row) === activeWeekKey);
-    const prevRows = weeklyMemberRows.filter(
-      (row) => getWeekKey(row) === getWeekKey(previousWeekRow)
-    );
-    const prevByName = new Map(prevRows.map((row) => [normalizeName(row.name), row]));
-    for (const row of currentRows) {
-      const prev = prevByName.get(normalizeName(row.name));
-      trendMap.set(normalizeName(row.name), row.draftRate - toSafeNumber(prev?.draftRate ?? 0));
-    }
-    return trendMap;
-  }, [activeWeekKey, previousWeekRow, weeklyMemberRows]);
-
-  const qaTrendByName = useMemo(() => {
-    const trendMap = new Map<string, number>();
-    if (!activeWeekKey || !previousWeekRow) return trendMap;
-
-    const currentRows = weeklyMemberRows.filter((row) => getWeekKey(row) === activeWeekKey);
-    const prevRows = weeklyMemberRows.filter(
-      (row) => getWeekKey(row) === getWeekKey(previousWeekRow)
-    );
-    const prevByName = new Map(prevRows.map((row) => [normalizeName(row.name), row]));
-    for (const row of currentRows) {
-      const prev = prevByName.get(normalizeName(row.name));
-      trendMap.set(normalizeName(row.name), row.qaRate - toSafeNumber(prev?.qaRate ?? 0));
-    }
-    return trendMap;
-  }, [activeWeekKey, previousWeekRow, weeklyMemberRows]);
-
   const drafterRowsBase = useMemo(
     () =>
       rankingMemberRows.filter(
@@ -1114,9 +1237,24 @@ function TeamsPageContent() {
   const topDraftRows = useMemo(() => drafterRows.slice(0, 3), [drafterRows]);
   const topQaRows = useMemo(() => qaRows.slice(0, 3), [qaRows]);
 
+  const uploadRowsByTeam = useMemo(() => {
+    const map = new Map<string, CsvRow[]>();
+    for (const row of uploadRows) {
+      const team = getTeamFromCsvRow(row);
+      if (!isRrePodTeam(team)) continue;
+      let bucket = map.get(team);
+      if (!bucket) {
+        bucket = [];
+        map.set(team, bucket);
+      }
+      bucket.push(row);
+    }
+    return map;
+  }, [uploadRows]);
+
   const fileAlerts = useMemo<FileAlertRow[]>(() => {
     if (!alertTeamFilter) return [];
-    const rows = uploadRows;
+    const rows = uploadRowsByTeam.get(alertTeamFilter) ?? [];
     if (rows.length === 0) return [];
 
     type Aggregated = {
@@ -1138,11 +1276,9 @@ function TeamsPageContent() {
     };
 
     const byFile = new Map<string, Aggregated>();
+    const rowTeam = alertTeamFilter;
     for (const row of rows) {
       if (!matchesPreset(row, selectedPreset as PresetMode)) continue;
-      const rowTeam = getTeamFromCsvRow(row);
-      if (!isRrePodTeam(rowTeam)) continue;
-      if (alertTeamFilter && rowTeam !== alertTeamFilter) continue;
 
       const fileName = getFileNameFromCsvRow(row);
       if (!fileName) continue;
@@ -1308,7 +1444,7 @@ function TeamsPageContent() {
         if (weekDelta !== 0) return weekDelta;
         return a.fileName.localeCompare(b.fileName);
       });
-  }, [alertTeamFilter, selectedPreset, uploadRows]);
+  }, [alertTeamFilter, selectedPreset, uploadRowsByTeam]);
 
   const alertPersonOptions = useMemo(() => {
     const names = new Set<string>();
@@ -1435,7 +1571,11 @@ function TeamsPageContent() {
     );
 
     const totalRow: WeeklyTeamRow = {
-      team: teamFilter ?? "ALL",
+      team: !teamFilterSet
+        ? "ALL"
+        : teamFilterSet.size === 1
+          ? Array.from(teamFilterSet)[0]
+          : "MULTIPLE",
       weekLabel: "Grand Total",
       firstDay: "-",
       lastDay: "-",
@@ -1448,7 +1588,7 @@ function TeamsPageContent() {
       qer: totals.qerWeight > 0 ? totals.qerWeighted / totals.qerWeight : 0,
     };
     return [...weeklyRows, totalRow];
-  }, [teamFilter, weeklyRows]);
+  }, [teamFilterSet, weeklyRows]);
 
   const historyActiveWeekKey = selectedHistoryWeekKey ?? activeWeekKey;
   const historyWeekRow = useMemo(
@@ -1574,8 +1714,8 @@ function TeamsPageContent() {
 
   return (
     <div className="space-y-7">
-      <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div className="bg-[linear-gradient(110deg,#fde68a_0%,#bfdbfe_45%,#fecaca_100%)] p-[1px]">
+      <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+        <div className="rounded-3xl bg-[linear-gradient(110deg,#fde68a_0%,#bfdbfe_45%,#fecaca_100%)] p-[1px]">
           <div className="rounded-[22px] bg-white/95 px-7 py-8 backdrop-blur">
             <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
               {t("Teams Intelligence", "Inteligencia de equipos")}
@@ -1609,25 +1749,20 @@ function TeamsPageContent() {
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 xl:col-span-2">
-                <p className="text-[11px] uppercase tracking-[0.14em] text-slate-500">Team</p>
-                <div className="relative mt-2">
-                  <select
-                    value={selectedTeam}
-                    onChange={(event) => setSelectedTeam(event.target.value as TeamFilter)}
-                    className="w-full appearance-none rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500"
-                  >
-                    <option value="all">
-                      All teams ({teamOptions.length} RRE pods)
-                    </option>
-                    {teamOptions.map((team) => (
-                      <option key={`team-option-${team}`} value={team}>
-                        {team}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
-                    <ChevronDownIcon />
-                  </span>
+                <p className="text-[11px] uppercase tracking-[0.14em] text-slate-500">
+                  {t("Pods", "Pods")}
+                </p>
+                <div className="mt-2">
+                  <PodMultiSelectPopover
+                    label={t("Pods", "Pods")}
+                    options={teamOptions.map((team) => ({ value: team, label: team }))}
+                    selectedValues={popoverPodSelection}
+                    onChange={(values) => setSelectedPods(values)}
+                    emptyMessage={t(
+                      "No pods are available for this preset.",
+                      "No hay pods disponibles para este preset."
+                    )}
+                  />
                 </div>
               </div>
 
@@ -1792,7 +1927,7 @@ function TeamsPageContent() {
 
                   <button
                     type="button"
-                    onClick={() => setSelectedTeam(team)}
+                    onClick={() => setSelectedPods([team])}
                     className="mt-4 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-700"
                   >
                     View Team
@@ -2087,10 +2222,6 @@ function TeamsPageContent() {
                 </thead>
                 <tbody>
                   {drafterRows.map((row, index) => {
-                    const trendDelta =
-                      selectedRankingMode === "weekly"
-                        ? draftTrendByName.get(normalizeName(row.name)) ?? 0
-                        : 0;
                     return (
                       <tr
                         key={`drafter-${row.team}-${row.name}`}
@@ -2116,14 +2247,11 @@ function TeamsPageContent() {
                           {renderMetricChip(row.draftHours, 2, getHoursTone(row.draftHours))}
                         </td>
                         <td className="py-3 pr-4">
-                          <div className="inline-flex items-center gap-2">
-                            <TrendPill delta={trendDelta} />
-                            {renderMetricChip(
-                              row.draftRate,
-                              0,
-                              getDraftMetricTone(row.draftRate, row.targetValue, row.draftHours)
-                            )}
-                          </div>
+                          {renderMetricChip(
+                            row.draftRate,
+                            0,
+                            getDraftMetricTone(row.draftRate, row.targetValue, row.draftHours)
+                          )}
                         </td>
                         <td className="py-3 pr-4">{renderMetricChip(row.qer, 1, getQERTone(row.qer), "%")}</td>
                         <td className="py-3 pr-4">{renderMetricChip(row.l1, 2, getErrorTone(row.l1))}</td>
@@ -2259,10 +2387,6 @@ function TeamsPageContent() {
                 </thead>
                 <tbody>
                   {qaRows.map((row, index) => {
-                    const trendDelta =
-                      selectedRankingMode === "weekly"
-                        ? qaTrendByName.get(normalizeName(row.name)) ?? 0
-                        : 0;
                     return (
                       <tr
                         key={`qa-${row.team}-${row.name}`}
@@ -2288,10 +2412,7 @@ function TeamsPageContent() {
                           {renderMetricChip(row.qaHours, 2, getHoursTone(row.qaHours))}
                         </td>
                         <td className="py-3 pr-4">
-                          <div className="inline-flex items-center gap-2">
-                            <TrendPill delta={trendDelta} />
-                            {renderMetricChip(row.qaRate, 0, getQAMetricTone(row.qaRate, row.qaHours))}
-                          </div>
+                          {renderMetricChip(row.qaRate, 0, getQAMetricTone(row.qaRate, row.qaHours))}
                         </td>
                         <td className="py-3 pr-4">{renderMetricChip(row.qer, 1, getQERTone(row.qer), "%")}</td>
                         <td className="py-3 pr-4">

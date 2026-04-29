@@ -24,6 +24,11 @@ type NavItem = {
 };
 
 const SIDEBAR_COLLAPSED_KEY = "metric-planitar-sidebar-collapsed";
+const SHIFT_LEADERS: Array<{ team: string; name: string }> = [
+  { team: "RRECO1", name: "Daniel Camilo Espejo" },
+  { team: "RRECO2", name: "Maria Vasquez" },
+  { team: "RRECO3", name: "Sebastian Cuervo" },
+];
 const MAIN_SECTIONS = [
   {
     href: "/",
@@ -482,20 +487,53 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           className={`mt-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 transition-all duration-300 ${
             collapsed ? "px-2 py-3" : ""
           }`}
-          title={collapsed ? (language === "es" ? "Jefe: David Rodriguez" : "Boss: David Rodriguez") : undefined}
+          title={collapsed ? (language === "es" ? "Lideres de turno" : "Shift leaders") : undefined}
         >
           {!collapsed ? (
             <>
               <p className="text-xs uppercase tracking-wider text-amber-700">
-                {language === "es" ? "Jefe" : "Boss"}
+                {language === "es" ? "Lideres de turno" : "Shift Leaders"}
               </p>
-              <p className="mt-2 text-sm font-semibold text-slate-900">David Rodriguez</p>
-              <p className="text-xs text-amber-800/80">
-                {language === "es" ? "Liderazgo" : "Leadership"}
-              </p>
+              <div className="mt-2 space-y-1.5">
+                {SHIFT_LEADERS.map((leader) => {
+                  const href = `/teams?team=${leader.team}`;
+                  return (
+                    <Link
+                      key={leader.team}
+                      href={href}
+                      className="block rounded-lg border border-amber-200/70 bg-white/70 px-2.5 py-1.5 transition hover:border-amber-300 hover:bg-white"
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-semibold text-slate-900">
+                            {leader.name}
+                          </span>
+                          <span className="block text-[11px] text-amber-800/80">
+                            {language === "es" ? "Lider" : "Leader"} - {leader.team}
+                          </span>
+                        </span>
+                        <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700">
+                          {leader.team}
+                        </span>
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
             </>
           ) : (
-            <div className="grid place-items-center text-xs font-semibold text-amber-700">DR</div>
+            <div className="flex flex-col items-center gap-1">
+              {SHIFT_LEADERS.map((leader) => (
+                <Link
+                  key={leader.team}
+                  href={`/teams?team=${leader.team}`}
+                  className="grid h-7 w-full place-items-center rounded-md bg-white text-[10px] font-semibold text-amber-700 transition hover:bg-amber-100"
+                  title={`${leader.name} - ${leader.team}`}
+                >
+                  {leader.team.replace("RRECO", "S")}
+                </Link>
+              ))}
+            </div>
           )}
         </div>
 
@@ -544,11 +582,11 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
       <main className="min-w-0">
         <header className="sticky top-0 z-40 px-4 pt-3 sm:px-6">
-          <div className="relative mx-auto max-w-[1500px] overflow-visible border border-amber-200/70 bg-[linear-gradient(96deg,rgba(252,209,22,0.96)_0%,rgba(255,244,188,0.95)_22%,rgba(0,56,147,0.78)_62%,rgba(206,17,38,0.76)_100%)] shadow-[0_20px_50px_-34px_rgba(15,23,42,0.42)] backdrop-blur-xl">
-            <div className="h-1.5 bg-[linear-gradient(90deg,#FCD116_0%,#FCD116_50%,#003893_50%,#003893_75%,#CE1126_75%,#CE1126_100%)]" />
+          <div className="relative mx-auto max-w-[1500px] overflow-visible rounded-2xl border border-amber-200/70 bg-[linear-gradient(96deg,rgba(252,209,22,0.96)_0%,rgba(255,244,188,0.95)_22%,rgba(0,56,147,0.78)_62%,rgba(206,17,38,0.76)_100%)] shadow-[0_20px_50px_-34px_rgba(15,23,42,0.42)] backdrop-blur-xl">
+            <div className="h-1.5 rounded-t-2xl bg-[linear-gradient(90deg,#FCD116_0%,#FCD116_50%,#003893_50%,#003893_75%,#CE1126_75%,#CE1126_100%)]" />
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_20%,rgba(255,255,255,0.42),transparent_26%),radial-gradient(circle_at_64%_18%,rgba(255,255,255,0.18),transparent_20%),linear-gradient(180deg,rgba(255,255,255,0.12),rgba(255,255,255,0.02))]"
+              className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(circle_at_12%_20%,rgba(255,255,255,0.42),transparent_26%),radial-gradient(circle_at_64%_18%,rgba(255,255,255,0.18),transparent_20%),linear-gradient(180deg,rgba(255,255,255,0.12),rgba(255,255,255,0.02))]"
             />
             <div className="relative z-10 mx-auto flex max-w-[1500px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
               <div className="min-w-0">

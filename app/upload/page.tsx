@@ -2,6 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Papa, { ParseResult } from "papaparse";
+import { parseScheduleWorkbook } from "@/lib/schedule/parse-xlsx";
+import {
+  readPersistedScheduleBatches,
+  writePersistedScheduleBatches,
+  clearPersistedScheduleBatches,
+} from "@/lib/store/schedule-batches";
+import type { ScheduleBatch } from "@/lib/schedule/schedule-types";
 import {
   COL_10K as COL_10K_LIB,
   COL_DRAFTER_NAME as COL_DRAFTER_NAME_LIB,
@@ -856,6 +863,12 @@ export default function UploadPage() {
   const [error, setError] = useState("");
   const [isProcessingUploads, setIsProcessingUploads] = useState(false);
 
+  const scheduleInputRef = useRef<HTMLInputElement | null>(null);
+  const [scheduleBatches, setScheduleBatches] = useState<ScheduleBatch[]>([]);
+  const [scheduleProcessing, setScheduleProcessing] = useState(false);
+  const [scheduleError, setScheduleError] = useState("");
+  const [scheduleWarnings, setScheduleWarnings] = useState<string[]>([]);
+
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [selectedTenK, setSelectedTenK] = useState<string[]>([]);
   const [selectedAds, setSelectedAds] = useState<string[]>([]);
@@ -943,6 +956,17 @@ export default function UploadPage() {
     };
 
     void loadBatches();
+
+    void (async () => {
+      try {
+        const persisted = await readPersistedScheduleBatches();
+        if (!isCancelled) {
+          setScheduleBatches(persisted.batches ?? []);
+        }
+      } catch {
+        if (!isCancelled) setScheduleBatches([]);
+      }
+    })();
 
     setPersonConfig(
       withDefaultTeamLeads(
@@ -1279,6 +1303,39 @@ export default function UploadPage() {
     } else {
       setPendingAustraliaFiles(files);
     }
+  }
+
+  async function handleScheduleFile(file: File | null) {
+    if (!file) return;
+    setScheduleError("");
+    setScheduleWarnings([]);
+    setScheduleProcessing(true);
+    try {
+      const yearFromName = file.name.match(/\b(20\d{2})\b/);
+      const defaultYear = yearFromName ? Number(yearFromName[1]) : new Date().getFullYear();
+      const result = await parseScheduleWorkbook(file, { defaultYear });
+      const persisted = await readPersistedScheduleBatches();
+      const nextBatches = [...(persisted.batches ?? []), result.batch];
+      await writePersistedScheduleBatches({
+        batches: nextBatches,
+        updatedAt: new Date().toISOString(),
+      });
+      setScheduleBatches(nextBatches);
+      setScheduleWarnings(result.warnings);
+    } catch (err) {
+      console.error("[schedule]", err);
+      setScheduleError(err instanceof Error ? err.message : "Error al procesar el archivo");
+    } finally {
+      setScheduleProcessing(false);
+      if (scheduleInputRef.current) scheduleInputRef.current.value = "";
+    }
+  }
+
+  async function clearScheduleHistory() {
+    await clearPersistedScheduleBatches();
+    setScheduleBatches([]);
+    setScheduleError("");
+    setScheduleWarnings([]);
   }
 
   async function processSelectedInputs() {
@@ -3164,6 +3221,78 @@ export default function UploadPage() {
             </p>
           )}
         </div>
+      </div>
+
+      <div className="rounded-[28px] border border-violet-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(245,243,255,0.98)_100%)] p-5 shadow-sm">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="text-base font-semibold text-slate-950">
+            Novedades / Schedule (.xlsx)
+          </p>
+          <span className="rounded-full bg-violet-100 px-3 py-1 text-[11px] font-semibold text-violet-700">
+            Vacaciones · Días libres · Media jornada · WFH · Calamidad · Incapacidad
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          Sube el archivo &ldquo;CO Staff 2026.xlsx&rdquo; (con todas las pestañas mensuales) y se cruzará con los perfiles para mostrar las novedades por día.
+        </p>
+        <input
+          ref={scheduleInputRef}
+          type="file"
+          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          onChange={(e) => {
+            const f = e.currentTarget.files?.[0] ?? null;
+            void handleScheduleFile(f);
+          }}
+          className="mt-3 block w-full cursor-pointer rounded-2xl border border-dashed border-violet-300 bg-violet-50/40 px-3 py-3 text-xs text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-violet-700 file:px-4 file:py-2.5 file:text-xs file:font-semibold file:text-white hover:border-violet-400"
+          disabled={scheduleProcessing}
+        />
+        {scheduleProcessing ? (
+          <p className="mt-3 text-xs font-medium text-violet-700">Procesando...</p>
+        ) : null}
+        {scheduleError ? (
+          <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-xs text-rose-700 ring-1 ring-rose-200">
+            {scheduleError}
+          </p>
+        ) : null}
+        {scheduleWarnings.length > 0 ? (
+          <ul className="mt-3 space-y-1 rounded-2xl bg-amber-50 px-3 py-2 text-[11px] text-amber-800 ring-1 ring-amber-200">
+            {scheduleWarnings.map((w, i) => (
+              <li key={`schedule-warn-${i}`}>• {w}</li>
+            ))}
+          </ul>
+        ) : null}
+        {scheduleBatches.length > 0 ? (
+          <div className="mt-3 rounded-2xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700 ring-1 ring-emerald-200">
+            <p className="font-semibold">
+              {scheduleBatches.length} archivo
+              {scheduleBatches.length === 1 ? "" : "s"} cargado
+              {scheduleBatches.length === 1 ? "" : "s"}
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {scheduleBatches.flatMap((b) =>
+                b.months.map((m) => {
+                  const eventCount = m.people.reduce(
+                    (s, p) => s + Object.keys(p.events).length,
+                    0
+                  );
+                  return (
+                    <li key={`sb-${b.id}-${m.sheetName}`}>
+                      {b.fileName} → {m.sheetName} {m.year}: {m.people.length} personas,{" "}
+                      {eventCount} novedades
+                    </li>
+                  );
+                })
+              )}
+            </ul>
+            <button
+              type="button"
+              onClick={() => void clearScheduleHistory()}
+              className="mt-2 inline-flex items-center rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+            >
+              Limpiar histórico
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

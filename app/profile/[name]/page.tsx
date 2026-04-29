@@ -27,8 +27,23 @@ import {
   COL_DRAFTER_TEAM,
   COL_QA_NAME,
   COL_QA_TEAM,
+  COL_TYPE,
 } from "@/lib/presets/constants";
 import { matchesPreset } from "@/lib/presets/matches-preset";
+import {
+  getAdsBucketFromRow,
+  getTenKBucketFromRow,
+  getTypeBucket,
+} from "@/lib/presets/buckets";
+import {
+  readPersistedScheduleBatches,
+  SCHEDULE_BATCHES_EVENT,
+} from "@/lib/store/schedule-batches";
+import {
+  eventTone,
+  type ScheduleBatch,
+  type ScheduleEvent,
+} from "@/lib/schedule/schedule-types";
 import type { CsvRow, PresetMode } from "@/lib/metrics/types";
 import type { TeamMemberSnapshotRow } from "@/lib/store/dashboard-snapshot";
 import { useAppLanguage } from "@/lib/i18n/app-language";
@@ -270,6 +285,138 @@ function ChevronDownIcon({ className = "h-4 w-4" }: { className?: string }) {
   );
 }
 
+type DayFileEntry = {
+  fileName: string;
+  fileUrl: string;
+  publishTs: Date;
+  draftMinutes: number;
+  qaMinutes: number;
+  isDrafter: boolean;
+  isQa: boolean;
+  category: string;
+  categoryTone: string;
+};
+
+function formatHM(d: Date) {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function formatMinutesDuration(mins: number) {
+  if (mins < 1) return `${Math.round(mins * 60)}s`;
+  const h = Math.floor(mins / 60);
+  const m = Math.round(mins % 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+const DailyFilesPanel = React.memo(function DailyFilesPanel({
+  files,
+  headerLabel,
+  isSpanish,
+}: {
+  files: DayFileEntry[];
+  headerLabel: string;
+  isSpanish: boolean;
+}) {
+  if (files.length === 0) return null;
+  return (
+    <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+          {isSpanish ? "Archivos del" : "Files for"}{" "}
+          <span className="text-slate-900">{headerLabel}</span>
+        </p>
+        <p className="text-[11px] text-slate-500">
+          {files.length} {files.length === 1 ? (isSpanish ? "archivo" : "file") : isSpanish ? "archivos" : "files"}
+        </p>
+      </div>
+      <p className="mt-1 text-[10px] italic text-slate-400">
+        {isSpanish
+          ? "El CSV no expone horas de claim/upload. Solo se muestra cuánto tomó cada archivo, en orden de publicación."
+          : "CSV does not expose claim/upload times. Only the time spent per file is shown, in order of publication."}
+      </p>
+      <ul className="mt-3 divide-y divide-slate-100">
+        {files.map((file, idx) => {
+          const role = file.isDrafter && file.isQa ? "Draft + QA" : file.isDrafter ? "Draft" : "QA";
+          return (
+            <li
+              key={`file-${idx}-${file.publishTs.getTime()}`}
+              className="grid gap-2 py-2.5 md:grid-cols-[36px_1fr_auto] md:items-center"
+            >
+              <div className="text-xs">
+                <p className="font-mono text-sm font-semibold text-slate-400">
+                  {String(idx + 1).padStart(2, "0")}
+                </p>
+                <p className="mt-0.5 text-[10px] uppercase tracking-wide text-slate-400">{role}</p>
+              </div>
+              <div className="flex min-w-0 items-center gap-2 text-sm">
+                <span
+                  className={`inline-flex shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${file.categoryTone}`}
+                >
+                  {file.category}
+                </span>
+                {file.fileUrl && /^https?:\/\//i.test(file.fileUrl) ? (
+                  <a
+                    href={file.fileUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="min-w-0 truncate font-medium text-blue-700 hover:underline"
+                  >
+                    {file.fileName}
+                  </a>
+                ) : (
+                  <p className="min-w-0 truncate font-medium text-slate-900">{file.fileName}</p>
+                )}
+              </div>
+              <div className="text-right text-xs">
+                {file.isDrafter && file.isQa ? (
+                  <>
+                    <p className="font-semibold text-slate-900">
+                      D {formatMinutesDuration(file.draftMinutes)}
+                    </p>
+                    <p className="mt-0.5 text-[10px] text-slate-500">
+                      Q {formatMinutesDuration(file.qaMinutes)}
+                    </p>
+                  </>
+                ) : file.isDrafter ? (
+                  <p className="font-semibold text-slate-900">
+                    Draft {formatMinutesDuration(file.draftMinutes)}
+                  </p>
+                ) : (
+                  <p className="font-semibold text-slate-900">
+                    QA {formatMinutesDuration(file.qaMinutes)}
+                  </p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {(() => {
+        const totalDraft = files.reduce((s, f) => s + (f.isDrafter ? f.draftMinutes : 0), 0);
+        const totalQa = files.reduce((s, f) => s + (f.isQa ? f.qaMinutes : 0), 0);
+        if (totalDraft === 0 && totalQa === 0) return null;
+        return (
+          <div className="mt-3 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-3 text-[11px] font-semibold">
+            {totalDraft > 0 ? (
+              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700 ring-1 ring-blue-200">
+                {isSpanish ? "Total Draft" : "Total Draft"} {formatMinutesDuration(totalDraft)}
+              </span>
+            ) : null}
+            {totalQa > 0 ? (
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700 ring-1 ring-emerald-200">
+                {isSpanish ? "Total QA" : "Total QA"} {formatMinutesDuration(totalQa)}
+              </span>
+            ) : null}
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-700 ring-1 ring-slate-200">
+              {isSpanish ? "Total" : "Total"} {formatMinutesDuration(totalDraft + totalQa)}
+            </span>
+          </div>
+        );
+      })()}
+    </div>
+  );
+});
+
 function defaultProfileNotes(name: string): ProfileNotes {
   return {
     about: `${name} maintains a steady focus on productivity, quality, and weekly operational control.`,
@@ -401,6 +548,31 @@ function parseDateCandidate(value?: string) {
   const dmy = token.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (dmy) {
     const date = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+
+  const parsed = Date.parse(token.replace(",", " "));
+  if (Number.isNaN(parsed)) return null;
+  const parsedDate = new Date(parsed);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+}
+
+function parseTimestampCandidate(value?: string) {
+  const token = normalizeValue(value);
+  if (!token) return null;
+
+  const iso = token.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ ,T]\s*(\d{1,2}):(\d{2})(?::(\d{2}))?)?/
+  );
+  if (iso) {
+    const date = new Date(
+      Number(iso[1]),
+      Number(iso[2]) - 1,
+      Number(iso[3]),
+      Number(iso[4] ?? 0),
+      Number(iso[5] ?? 0),
+      Number(iso[6] ?? 0)
+    );
     if (!Number.isNaN(date.getTime())) return date;
   }
 
@@ -542,6 +714,7 @@ export default function PersonProfilePage() {
   const [profileMode, setProfileMode] = useState<ProfileMode>("global");
   const [selectedWeekKey, setSelectedWeekKey] = useState<"latest" | string>("latest");
   const [uploadRows, setUploadRows] = useState<CsvRow[]>([]);
+  const [scheduleBatches, setScheduleBatches] = useState<ScheduleBatch[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(true);
   const [selectedAlertWeekKey, setSelectedAlertWeekKey] = useState("all");
   const [draftTrendVisible, setDraftTrendVisible] = useState<Record<PersonPresetMode, boolean>>(
@@ -557,6 +730,7 @@ export default function PersonProfilePage() {
   const [peopleSearchQuery, setPeopleSearchQuery] = useState("");
   const [selectedPeoplePods, setSelectedPeoplePods] = useState<string[]>([]);
   const [expandedWeekKeys, setExpandedWeekKeys] = useState<Set<string>>(new Set());
+  const [expandedDayKeys, setExpandedDayKeys] = useState<Map<string, string | null>>(new Map());
   const [podsInitialized, setPodsInitialized] = useState(false);
   const [podsDropdownOpen, setPodsDropdownOpen] = useState(false);
   const podsTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -649,6 +823,81 @@ export default function PersonProfilePage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSchedule() {
+      try {
+        const persisted = await readPersistedScheduleBatches();
+        if (!cancelled) setScheduleBatches(persisted.batches ?? []);
+      } catch {
+        if (!cancelled) setScheduleBatches([]);
+      }
+    }
+    void loadSchedule();
+    const onUpdate = () => void loadSchedule();
+    if (typeof window !== "undefined") {
+      window.addEventListener(SCHEDULE_BATCHES_EVENT, onUpdate);
+    }
+    return () => {
+      cancelled = true;
+      if (typeof window !== "undefined") {
+        window.removeEventListener(SCHEDULE_BATCHES_EVENT, onUpdate);
+      }
+    };
+  }, []);
+
+  const personEventsByDate = useMemo(() => {
+    const map = new Map<string, ScheduleEvent>();
+    if (scheduleBatches.length === 0) return map;
+
+    const profileTokens = normalizedPersonName.split(" ").filter(Boolean);
+    if (profileTokens.length === 0) return map;
+
+    // Score each schedule person by how well they match the profile name.
+    // Score = number of profile tokens that appear in the schedule name's tokens.
+    // Tie-breaker: shorter schedule name wins (more specific match).
+    type Match = { person: (typeof scheduleBatches)[number]["months"][number]["people"][number]; score: number; len: number };
+    const candidates = new Map<string, Match>();
+    for (const batch of scheduleBatches) {
+      for (const month of batch.months) {
+        for (const person of month.people) {
+          if (candidates.has(person.normalizedName)) continue;
+          const scheduleTokens = person.normalizedName.split(" ").filter(Boolean);
+          let score = 0;
+          for (const t of profileTokens) {
+            if (scheduleTokens.includes(t)) score += 1;
+          }
+          if (score === profileTokens.length) {
+            candidates.set(person.normalizedName, {
+              person,
+              score,
+              len: scheduleTokens.length,
+            });
+          }
+        }
+      }
+    }
+
+    if (candidates.size === 0) return map;
+
+    // Pick the most specific (shortest) match.
+    const best = Array.from(candidates.values()).sort((a, b) => a.len - b.len)[0];
+    if (!best) return map;
+    const matchedNormalizedName = best.person.normalizedName;
+
+    for (const batch of scheduleBatches) {
+      for (const month of batch.months) {
+        for (const person of month.people) {
+          if (person.normalizedName !== matchedNormalizedName) continue;
+          for (const [iso, event] of Object.entries(person.events)) {
+            map.set(iso, event);
+          }
+        }
+      }
+    }
+    return map;
+  }, [scheduleBatches, normalizedPersonName]);
 
   const config = useMemo(() => {
     const row = personConfig[personName];
@@ -1316,6 +1565,113 @@ export default function PersonProfilePage() {
 
   const dailyHoursByWeek = dailyHoursResult.byWeek;
   const dailyHoursDiag = dailyHoursResult.diag;
+
+  const dailyFilesByWeek = useMemo(() => {
+    const byWeek = new Map<string, Map<string, DayFileEntry[]>>();
+    if (!uploadRows.length) return byWeek;
+
+    const seen = new Set<string>();
+    for (const row of uploadRows) {
+      const drafter = normalizeValue(getField(row, COL_DRAFTER_NAME));
+      const qa = normalizeValue(getField(row, COL_QA_NAME));
+      const isDrafter = normalizeName(drafter) === normalizedPersonName;
+      const isQa = normalizeName(qa) === normalizedPersonName;
+      if (!isDrafter && !isQa) continue;
+
+      const tsRaw = normalizeValue(
+        getField(row, [
+          "Publish Timestamp",
+          "PublishTimestamp",
+          "Publish Date",
+          "PublishDate",
+          "Completed Date",
+          "CompletedDate",
+          "Date",
+        ])
+      );
+      const publishTs = parseTimestampCandidate(tsRaw);
+      if (!publishTs) continue;
+
+      const monday = getMonday(publishTs);
+      const sunday = getSunday(publishTs);
+      const weekLabel = `Week ${getISOWeek(publishTs)}`;
+      const weekKey = `${weekLabel}|${formatDateLabel(monday)}|${formatDateLabel(sunday)}`;
+      const dayKey = `${publishTs.getFullYear()}-${String(publishTs.getMonth() + 1).padStart(2, "0")}-${String(publishTs.getDate()).padStart(2, "0")}`;
+
+      const fileUrl = normalizeValue(
+        getStrictFieldByAliases(row, ["iGUIDE URL", "URL", "Link"])
+      );
+      const propertyAddress = normalizeValue(
+        getStrictFieldByAliases(row, ["Property Address", "Address"])
+      );
+      const explicitFileName = normalizeValue(
+        getStrictFieldByAliases(row, ["File", "File Name", "Filename"])
+      );
+      const urlTail = fileUrl
+        ? fileUrl.replace(/\/+$/, "").split("/").pop() ?? ""
+        : "";
+      const fileName =
+        propertyAddress ||
+        explicitFileName ||
+        urlTail ||
+        fileUrl ||
+        "(unnamed)";
+      const draftMinutes = parseNumber(
+        getField(row, ["Draft Time (C)", "Draft Time", "Time"])
+      );
+      const qaMinutes = parseNumber(
+        getField(row, ["QA Time (D)", "QA Time", "QA Time (h)"])
+      );
+
+      const typeBucket = getTypeBucket(getField(row, COL_TYPE));
+      const tenKBucket = getTenKBucketFromRow(row);
+      const adsBucket = getAdsBucketFromRow(row);
+      let category = "Other";
+      let categoryTone = "border-slate-200 bg-slate-50 text-slate-600";
+      if (tenKBucket === "above") {
+        category = ">10k";
+        categoryTone = "border-purple-200 bg-purple-50 text-purple-700";
+      } else if (typeBucket === "draft" && adsBucket === "ads") {
+        category = "ADS Std";
+        categoryTone = "border-cyan-200 bg-cyan-50 text-cyan-700";
+      } else if (typeBucket === "draft-premium" && adsBucket === "ads") {
+        category = "ADS Prem";
+        categoryTone = "border-indigo-200 bg-indigo-50 text-indigo-700";
+      } else if (typeBucket === "draft-premium") {
+        category = "Premium";
+        categoryTone = "border-amber-200 bg-amber-50 text-amber-700";
+      } else if (typeBucket === "draft") {
+        category = "Std";
+        categoryTone = "border-emerald-200 bg-emerald-50 text-emerald-700";
+      }
+
+      const dedupKey = `${fileName}|${publishTs.getTime()}|${isDrafter ? "d" : ""}${isQa ? "q" : ""}`;
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+
+      if (!byWeek.has(weekKey)) byWeek.set(weekKey, new Map());
+      const dayMap = byWeek.get(weekKey)!;
+      if (!dayMap.has(dayKey)) dayMap.set(dayKey, []);
+      dayMap.get(dayKey)!.push({
+        fileName,
+        fileUrl,
+        publishTs,
+        draftMinutes,
+        qaMinutes,
+        isDrafter,
+        isQa,
+        category,
+        categoryTone,
+      });
+    }
+
+    for (const dayMap of byWeek.values()) {
+      for (const files of dayMap.values()) {
+        files.sort((a, b) => a.publishTs.getTime() - b.publishTs.getTime());
+      }
+    }
+    return byWeek;
+  }, [uploadRows, normalizedPersonName]);
 
   const profileAlertWeekOptions = useMemo(() => {
     const weeks = new Map<
@@ -2019,6 +2375,48 @@ export default function PersonProfilePage() {
                         draftHours: d.draftHours * draftScale,
                         qaHours: d.qaHours * qaScale,
                       }));
+                      // Always render every day of the week (Mon-Sun) so the
+                      // user can see the whole picture, even days with no work
+                      // and no schedule event. Also collect events for the
+                      // week-level badge summary.
+                      const weekEventsByCode = new Map<string, { label: string; tone: string; count: number }>();
+                      const monday = parseDateCandidate(row.firstDay);
+                      const sunday = parseDateCandidate(row.lastDay);
+                      if (monday && sunday) {
+                        const existingDayKeys = new Set(days.map((d) => d.dayKey));
+                        const dayMs = 86400000;
+                        for (let t = monday.getTime(); t <= sunday.getTime(); t += dayMs) {
+                          const date = new Date(t);
+                          const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+                          const event = personEventsByDate.get(dayKey);
+                          if (event) {
+                            const existing = weekEventsByCode.get(event.code);
+                            if (existing) {
+                              existing.count += 1;
+                            } else {
+                              weekEventsByCode.set(event.code, {
+                                label: event.label,
+                                tone: eventTone(event.code),
+                                count: 1,
+                              });
+                            }
+                          }
+                          if (existingDayKeys.has(dayKey)) continue;
+                          const weekday = date.getDay();
+                          const weekdayShortEs = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"][weekday];
+                          const weekdayShortEn = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][weekday];
+                          days.push({
+                            dayKey,
+                            date,
+                            label: formatDateLabel(date),
+                            weekday: locale.startsWith("en") ? weekdayShortEn : weekdayShortEs,
+                            draftHours: 0,
+                            qaHours: 0,
+                          });
+                        }
+                        days.sort((a, b) => a.date.getTime() - b.date.getTime());
+                      }
+                      const weekEventBadges = Array.from(weekEventsByCode.values()).sort((a, b) => b.count - a.count);
                       return (
                         <React.Fragment key={`history-week-${key}`}>
                         <tr
@@ -2056,11 +2454,26 @@ export default function PersonProfilePage() {
                                 </svg>
                               </button>
                               <span className={`h-2.5 w-2.5 rounded-full ${active ? "bg-blue-600" : "bg-slate-300"}`} />
-                              <div>
+                              <div className="min-w-0">
                                 <p className="font-semibold text-slate-950">{row.weekLabel}</p>
                                 <p className="text-xs text-slate-500">
                                   {locale.startsWith("en") ? "Open week details" : "Abrir detalles de la semana"}
                                 </p>
+                                {weekEventBadges.length > 0 ? (
+                                  <div className="mt-1.5 flex flex-wrap gap-1">
+                                    {weekEventBadges.map((b) => (
+                                      <span
+                                        key={`week-evt-${key}-${b.label}`}
+                                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${b.tone}`}
+                                        title={`${b.label}: ${b.count} día${b.count === 1 ? "" : "s"}`}
+                                      >
+                                        <span aria-hidden="true">●</span>
+                                        {b.label}
+                                        {b.count > 1 ? <span className="opacity-70">×{b.count}</span> : null}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
                           </td>
@@ -2214,10 +2627,34 @@ export default function PersonProfilePage() {
                                             : total >= 6
                                               ? "border-amber-200 bg-amber-50"
                                               : "border-rose-200 bg-rose-50";
+                                      const dayMapFiles = dailyFilesByWeek.get(key);
+                                      const fileCount = dayMapFiles?.get(d.dayKey)?.length ?? 0;
+                                      const selectedDayKey = expandedDayKeys.get(key) ?? null;
+                                      const isSelected = selectedDayKey === d.dayKey;
+                                      const event = personEventsByDate.get(d.dayKey) ?? null;
                                       return (
-                                        <div
+                                        <button
                                           key={`day-${key}-${d.dayKey}`}
-                                          className={`rounded-2xl border p-3 ${tone}`}
+                                          type="button"
+                                          onClick={() =>
+                                            setExpandedDayKeys((prev) => {
+                                              const next = new Map(prev);
+                                              if (next.get(key) === d.dayKey) {
+                                                next.delete(key);
+                                              } else {
+                                                next.set(key, d.dayKey);
+                                              }
+                                              return next;
+                                            })
+                                          }
+                                          disabled={fileCount === 0}
+                                          className={`group rounded-2xl border p-3 text-left transition ${tone} ${
+                                            isSelected
+                                              ? "ring-2 ring-blue-400 ring-offset-1"
+                                              : fileCount > 0
+                                                ? "hover:border-blue-300 hover:shadow-sm"
+                                                : "cursor-default opacity-90"
+                                          }`}
                                         >
                                           <div className="flex items-baseline justify-between gap-2">
                                             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
@@ -2232,10 +2669,41 @@ export default function PersonProfilePage() {
                                           <p className="mt-1 text-[11px] text-slate-600">
                                             Draft {formatNumber(d.draftHours, 2)} · QA {formatNumber(d.qaHours, 2)}
                                           </p>
-                                        </div>
+                                          {event ? (
+                                            <span
+                                              className={`mt-1.5 inline-flex w-full items-center justify-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${eventTone(event.code)}`}
+                                            >
+                                              {event.label}
+                                            </span>
+                                          ) : null}
+                                          {fileCount > 0 ? (
+                                            <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-blue-700">
+                                              {fileCount} {fileCount === 1
+                                                ? locale.startsWith("en") ? "file" : "archivo"
+                                                : locale.startsWith("en") ? "files" : "archivos"}
+                                              {" "}
+                                              {isSelected ? "▾" : "▸"}
+                                            </p>
+                                          ) : null}
+                                        </button>
                                       );
                                     })}
                                   </div>
+                                  {(() => {
+                                    const selectedDayKey = expandedDayKeys.get(key);
+                                    if (!selectedDayKey) return null;
+                                    const files = dailyFilesByWeek.get(key)?.get(selectedDayKey) ?? [];
+                                    if (files.length === 0) return null;
+                                    const dayMeta = days.find((d) => d.dayKey === selectedDayKey);
+                                    const headerLabel = `${dayMeta?.weekday ?? ""} ${dayMeta?.label ?? ""}`.trim();
+                                    return (
+                                      <DailyFilesPanel
+                                        files={files}
+                                        headerLabel={headerLabel}
+                                        isSpanish={!locale.startsWith("en")}
+                                      />
+                                    );
+                                  })()}
                                 </div>
                               )}
                             </td>
