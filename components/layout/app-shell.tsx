@@ -741,7 +741,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 sm:py-8">
           {children}
         </div>
-        <footer className="border-t border-slate-200/80 bg-white/80">
+        <footer className="app-shell-footer border-t border-slate-200/80 bg-white/80">
           <div className="mx-auto max-w-[1500px] px-4 py-4 text-center text-xs text-slate-500 sm:px-6">
             {language === "es" ? "Disenado y desarrollado por " : "Designed and developed by "}
             <a

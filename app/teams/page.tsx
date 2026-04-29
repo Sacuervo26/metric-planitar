@@ -162,6 +162,27 @@ let cachedPersonConfigParsed: Record<string, PersonConfig> = EMPTY_PERSON_CONFIG
 
 const isRrePodTeam = (team: string) => /^RRE[A-Z]{2,4}\d+$/i.test(String(team ?? "").trim());
 
+const POD_CHART_COLORS = [
+  "#2563eb", // blue
+  "#10b981", // emerald
+  "#f59e0b", // amber
+  "#8b5cf6", // violet
+  "#ef4444", // red
+  "#06b6d4", // cyan
+  "#f97316", // orange
+  "#ec4899", // pink
+  "#14b8a6", // teal
+  "#84cc16", // lime
+  "#6366f1", // indigo
+  "#64748b", // slate
+];
+
+function colorForPod(pod: string, allPods: ReadonlyArray<string>): string {
+  const idx = allPods.indexOf(pod);
+  if (idx < 0) return POD_CHART_COLORS[0];
+  return POD_CHART_COLORS[idx % POD_CHART_COLORS.length];
+}
+
 const normalizeName = (value: string) =>
   value
     .normalize("NFD")
@@ -866,6 +887,29 @@ function TeamsPageContent() {
     }
   }, [searchParams, teamOptions]);
 
+  // Default selection: only RRECO* pods on first load (when no URL ?team= param
+  // forced a specific selection). User can still expand to other pods manually.
+  const hasInitializedDefaultPodsRef = useRef(false);
+  useEffect(() => {
+    if (hasInitializedDefaultPodsRef.current) return;
+    if (teamOptions.length === 0) return;
+    if (selectedPods !== null) {
+      hasInitializedDefaultPodsRef.current = true;
+      return;
+    }
+    const teamParam = (searchParams.get("team") ?? "").trim().toUpperCase();
+    if (teamParam) {
+      // URL param will populate selectedPods via the effect above; skip default.
+      hasInitializedDefaultPodsRef.current = true;
+      return;
+    }
+    const rrecoTeams = teamOptions.filter((team) => /^RRECO\d+$/i.test(team));
+    if (rrecoTeams.length > 0) {
+      setSelectedPods(rrecoTeams);
+    }
+    hasInitializedDefaultPodsRef.current = true;
+  }, [teamOptions, selectedPods, searchParams]);
+
   useEffect(() => {
     if (selectedPods === null || teamOptions.length === 0) return;
     const valid = new Set(teamOptions);
@@ -1056,6 +1100,50 @@ function TeamsPageContent() {
       (row) => isRrePodTeam(row.team) && (!teamFilterSet || teamFilterSet.has(row.team))
     );
   }, [selectedPreset, snapshot, teamFilterSet]);
+
+  // Pivot per-week-per-pod data for charts: each row has weekLabel +
+  // dynamic columns "<POD>__draftRate", "<POD>__qaRate", "<POD>__files".
+  const weeklyByPod = useMemo(() => {
+    type PodRow = {
+      weekKey: string;
+      weekLabel: string;
+      firstDay: string;
+      lastDay: string;
+      sortKey: number;
+      [k: string]: number | string;
+    };
+    const map = new Map<string, PodRow>();
+    for (const row of weeklyTeamRowsForPreset) {
+      const team = String(row.team ?? "").trim().toUpperCase();
+      if (!team) continue;
+      const weekKey = getWeekKey(row);
+      let entry = map.get(weekKey);
+      if (!entry) {
+        entry = {
+          weekKey,
+          weekLabel: row.weekLabel,
+          firstDay: row.firstDay,
+          lastDay: row.lastDay,
+          sortKey: parseFirstDayToTime(row.firstDay),
+        };
+        map.set(weekKey, entry);
+      }
+      entry[`${team}__draftRate`] = toSafeNumber(row.draftRate);
+      entry[`${team}__qaRate`] = toSafeNumber(row.qaRate);
+      entry[`${team}__files`] =
+        toSafeNumber(row.draftFiles) + toSafeNumber(row.qaFiles);
+    }
+    return Array.from(map.values()).sort((a, b) => a.sortKey - b.sortKey);
+  }, [weeklyTeamRowsForPreset]);
+
+  const visiblePodsInChart = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of weeklyTeamRowsForPreset) {
+      const team = String(row.team ?? "").trim().toUpperCase();
+      if (team) set.add(team);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [weeklyTeamRowsForPreset]);
 
   const latestWeekKey = useMemo(
     () => (weeklyRows.length === 0 ? null : getWeekKey(weeklyRows[weeklyRows.length - 1])),
@@ -2066,31 +2154,45 @@ function TeamsPageContent() {
               </div>
 
               <div className="mt-6">
-                <ResponsiveContainer width="100%" height={320}>
-                  <LineChart data={weeklyRows}>
+                <ResponsiveContainer width="100%" height={360}>
+                  <LineChart data={weeklyByPod}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis dataKey="weekLabel" />
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="draftRate"
-                      name="Draft Rate"
-                      stroke="#2563eb"
-                      strokeWidth={2.6}
-                      dot={{ r: 2.5 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="qaRate"
-                      name="QA Rate"
-                      stroke="#10b981"
-                      strokeWidth={2.6}
-                      dot={{ r: 2.5 }}
-                    />
+                    {visiblePodsInChart.map((pod) => (
+                      <Line
+                        key={`draft-${pod}`}
+                        type="monotone"
+                        dataKey={`${pod}__draftRate`}
+                        name={`${pod} Draft`}
+                        stroke={colorForPod(pod, visiblePodsInChart)}
+                        strokeWidth={2.4}
+                        dot={{ r: 2.5 }}
+                        connectNulls
+                        isAnimationActive={false}
+                      />
+                    ))}
+                    {visiblePodsInChart.map((pod) => (
+                      <Line
+                        key={`qa-${pod}`}
+                        type="monotone"
+                        dataKey={`${pod}__qaRate`}
+                        name={`${pod} QA`}
+                        stroke={colorForPod(pod, visiblePodsInChart)}
+                        strokeDasharray="5 4"
+                        strokeWidth={2}
+                        dot={{ r: 2 }}
+                        connectNulls
+                        isAnimationActive={false}
+                      />
+                    ))}
                   </LineChart>
                 </ResponsiveContainer>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  Línea sólida = Draft Rate · Línea punteada = QA Rate · Color por pod
+                </p>
               </div>
             </section>
 
@@ -2099,15 +2201,23 @@ function TeamsPageContent() {
                 title="Weekly volume"
                 subtitle="Draft and QA files by week for the active preset."
               >
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={weeklyRows} barCategoryGap="35%">
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={weeklyByPod} barCategoryGap="25%">
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis dataKey="weekLabel" />
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Bar dataKey="draftFiles" name="Draft Files" fill="#2563eb" barSize={14} isAnimationActive={false} />
-                    <Bar dataKey="qaFiles" name="QA Files" fill="#10b981" barSize={14} isAnimationActive={false} />
+                    {visiblePodsInChart.map((pod) => (
+                      <Bar
+                        key={`files-${pod}`}
+                        dataKey={`${pod}__files`}
+                        name={pod}
+                        fill={colorForPod(pod, visiblePodsInChart)}
+                        radius={[4, 4, 0, 0]}
+                        isAnimationActive={false}
+                      />
+                    ))}
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>

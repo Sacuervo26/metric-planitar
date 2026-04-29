@@ -44,6 +44,12 @@ import {
   type ScheduleBatch,
   type ScheduleEvent,
 } from "@/lib/schedule/schedule-types";
+import {
+  readAdjustmentsForPerson,
+  saveAdjustment,
+  MANUAL_DAY_ADJUSTMENTS_EVENT,
+  type ManualDayAdjustment,
+} from "@/lib/store/manual-day-adjustments";
 import type { CsvRow, PresetMode } from "@/lib/metrics/types";
 import type { TeamMemberSnapshotRow } from "@/lib/store/dashboard-snapshot";
 import { useAppLanguage } from "@/lib/i18n/app-language";
@@ -312,12 +318,21 @@ const DailyFilesPanel = React.memo(function DailyFilesPanel({
   files,
   headerLabel,
   isSpanish,
+  dayKey,
+  adjustment,
+  onSaveAdjustment,
 }: {
   files: DayFileEntry[];
   headerLabel: string;
   isSpanish: boolean;
+  dayKey: string;
+  adjustment: ManualDayAdjustment | null;
+  onSaveAdjustment: (
+    isoDate: string,
+    additionalHours: number,
+    note: string
+  ) => Promise<void>;
 }) {
-  if (files.length === 0) return null;
   return (
     <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -329,11 +344,19 @@ const DailyFilesPanel = React.memo(function DailyFilesPanel({
           {files.length} {files.length === 1 ? (isSpanish ? "archivo" : "file") : isSpanish ? "archivos" : "files"}
         </p>
       </div>
-      <p className="mt-1 text-[10px] italic text-slate-400">
-        {isSpanish
-          ? "El CSV no expone horas de claim/upload. Solo se muestra cuánto tomó cada archivo, en orden de publicación."
-          : "CSV does not expose claim/upload times. Only the time spent per file is shown, in order of publication."}
-      </p>
+      {files.length > 0 ? (
+        <p className="mt-1 text-[10px] italic text-slate-400">
+          {isSpanish
+            ? "El CSV no expone horas de claim/upload. Solo se muestra cuánto tomó cada archivo, en orden de publicación."
+            : "CSV does not expose claim/upload times. Only the time spent per file is shown, in order of publication."}
+        </p>
+      ) : (
+        <p className="mt-1 text-[11px] text-slate-500">
+          {isSpanish
+            ? "Sin archivos publicados este día — puedes registrar abajo horas adicionales si trabajó en archivos que terminó otra persona."
+            : "No files published this day — you can register additional hours below."}
+        </p>
+      )}
       <ul className="mt-3 divide-y divide-slate-100">
         {files.map((file, idx) => {
           const role = file.isDrafter && file.isQa ? "Draft + QA" : file.isDrafter ? "Draft" : "QA";
@@ -413,9 +436,155 @@ const DailyFilesPanel = React.memo(function DailyFilesPanel({
           </div>
         );
       })()}
+
+      <AdjustmentEditor
+        dayKey={dayKey}
+        adjustment={adjustment}
+        isSpanish={isSpanish}
+        onSave={onSaveAdjustment}
+      />
     </div>
   );
 });
+
+function AdjustmentEditor({
+  dayKey,
+  adjustment,
+  isSpanish,
+  onSave,
+}: {
+  dayKey: string;
+  adjustment: ManualDayAdjustment | null;
+  isSpanish: boolean;
+  onSave: (
+    isoDate: string,
+    additionalHours: number,
+    note: string
+  ) => Promise<void>;
+}) {
+  const [hours, setHours] = useState<string>(
+    adjustment?.additionalHours ? String(adjustment.additionalHours) : ""
+  );
+  const [note, setNote] = useState<string>(adjustment?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<string>("");
+
+  // Reset fields when the adjustment for this day changes externally.
+  useEffect(() => {
+    setHours(
+      adjustment?.additionalHours ? String(adjustment.additionalHours) : ""
+    );
+    setNote(adjustment?.note ?? "");
+    setFeedback("");
+  }, [adjustment?.additionalHours, adjustment?.note, dayKey]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setFeedback("");
+    try {
+      const numericHours = Number(hours);
+      const safeHours = Number.isFinite(numericHours) && numericHours > 0 ? numericHours : 0;
+      await onSave(dayKey, safeHours, note);
+      setFeedback(isSpanish ? "Guardado ✓" : "Saved ✓");
+      setTimeout(() => setFeedback(""), 1800);
+    } catch {
+      setFeedback(isSpanish ? "Error al guardar" : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClear = async () => {
+    setSaving(true);
+    setFeedback("");
+    try {
+      await onSave(dayKey, 0, "");
+      setHours("");
+      setNote("");
+      setFeedback(isSpanish ? "Eliminado ✓" : "Removed ✓");
+      setTimeout(() => setFeedback(""), 1800);
+    } catch {
+      setFeedback(isSpanish ? "Error" : "Error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+        {isSpanish ? "Horas adicionales (manual)" : "Additional hours (manual)"}
+      </p>
+      <p className="mt-1 text-[11px] text-amber-900/70">
+        {isSpanish
+          ? "Para horas trabajadas que no se reflejaron en el CSV (archivos que terminó otra persona, soporte, reuniones, etc.). Las suma el reporte y queda registrada con tu nota."
+          : "For hours worked that did not appear in the CSV (files finished by someone else, support, meetings). The report adds them with the note."}
+      </p>
+      <div className="mt-3 grid gap-2 md:grid-cols-[140px_1fr_auto] md:items-end">
+        <label className="block text-xs">
+          <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+            {isSpanish ? "Horas extra" : "Extra hours"}
+          </span>
+          <input
+            type="number"
+            min="0"
+            step="0.25"
+            value={hours}
+            onChange={(e) => setHours(e.target.value)}
+            placeholder="0.0"
+            className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm font-mono text-slate-900 outline-none focus:border-amber-500"
+          />
+        </label>
+        <label className="block text-xs">
+          <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+            {isSpanish ? "Nota del Shift Leader" : "Shift Leader note"}
+          </span>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={
+              isSpanish
+                ? "Ej: Trabajó 2h en File X que terminó Juan"
+                : "Ex: Worked 2h on File X finished by Juan"
+            }
+            className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none focus:border-amber-500"
+          />
+        </label>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:opacity-60"
+          >
+            {saving ? "..." : isSpanish ? "Guardar" : "Save"}
+          </button>
+          {adjustment ? (
+            <button
+              type="button"
+              onClick={handleClear}
+              disabled={saving}
+              className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
+              title={isSpanish ? "Eliminar registro" : "Remove entry"}
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {feedback ? (
+        <p className="mt-2 text-[11px] font-semibold text-amber-700">{feedback}</p>
+      ) : null}
+      {adjustment?.updatedAt ? (
+        <p className="mt-2 text-[10px] text-amber-700/70">
+          {isSpanish ? "Actualizado" : "Updated"}{" "}
+          {new Date(adjustment.updatedAt).toLocaleString("es-CO")}
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 function defaultProfileNotes(name: string): ProfileNotes {
   return {
@@ -715,6 +884,7 @@ export default function PersonProfilePage() {
   const [selectedWeekKey, setSelectedWeekKey] = useState<"latest" | string>("latest");
   const [uploadRows, setUploadRows] = useState<CsvRow[]>([]);
   const [scheduleBatches, setScheduleBatches] = useState<ScheduleBatch[]>([]);
+  const [adjustments, setAdjustments] = useState<ManualDayAdjustment[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(true);
   const [selectedAlertWeekKey, setSelectedAlertWeekKey] = useState("all");
   const [draftTrendVisible, setDraftTrendVisible] = useState<Record<PersonPresetMode, boolean>>(
@@ -846,6 +1016,49 @@ export default function PersonProfilePage() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAdjustments() {
+      try {
+        const list = await readAdjustmentsForPerson(normalizedPersonName);
+        if (!cancelled) setAdjustments(list);
+      } catch {
+        if (!cancelled) setAdjustments([]);
+      }
+    }
+    void loadAdjustments();
+    const onUpdate = () => void loadAdjustments();
+    if (typeof window !== "undefined") {
+      window.addEventListener(MANUAL_DAY_ADJUSTMENTS_EVENT, onUpdate);
+    }
+    return () => {
+      cancelled = true;
+      if (typeof window !== "undefined") {
+        window.removeEventListener(MANUAL_DAY_ADJUSTMENTS_EVENT, onUpdate);
+      }
+    };
+  }, [normalizedPersonName]);
+
+  const adjustmentsByDate = useMemo(() => {
+    const map = new Map<string, ManualDayAdjustment>();
+    for (const a of adjustments) map.set(a.isoDate, a);
+    return map;
+  }, [adjustments]);
+
+  const handleSaveAdjustment = async (
+    isoDate: string,
+    additionalHours: number,
+    note: string
+  ) => {
+    await saveAdjustment({
+      normalizedPersonName,
+      isoDate,
+      additionalHours,
+      note,
+    });
+    // The event listener above will refresh state.
+  };
 
   const personEventsByDate = useMemo(() => {
     const map = new Map<string, ScheduleEvent>();
@@ -2322,9 +2535,28 @@ export default function PersonProfilePage() {
                   Click any row to focus that week and compare its operating context.
                 </p>
               </div>
-              <span className="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-600">
-                {personWeeksForPreset.length} visible weeks
-              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href={`/profile/${encodeURIComponent(personName)}/report`}
+                  target="_blank"
+                  rel="noopener"
+                  className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+                    <path
+                      d="M14 3v4a1 1 0 0 0 1 1h4M5 4a1 1 0 0 1 1-1h8l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Reporte
+                </Link>
+                <span className="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-600">
+                  {personWeeksForPreset.length} visible weeks
+                </span>
+              </div>
             </div>
             <div className="mt-5 overflow-hidden rounded-[24px] border border-slate-200">
               <div className="max-h-[430px] overflow-auto">
@@ -2632,6 +2864,7 @@ export default function PersonProfilePage() {
                                       const selectedDayKey = expandedDayKeys.get(key) ?? null;
                                       const isSelected = selectedDayKey === d.dayKey;
                                       const event = personEventsByDate.get(d.dayKey) ?? null;
+                                      const adjustment = adjustmentsByDate.get(d.dayKey) ?? null;
                                       return (
                                         <button
                                           key={`day-${key}-${d.dayKey}`}
@@ -2647,13 +2880,10 @@ export default function PersonProfilePage() {
                                               return next;
                                             })
                                           }
-                                          disabled={fileCount === 0}
                                           className={`group rounded-2xl border p-3 text-left transition ${tone} ${
                                             isSelected
                                               ? "ring-2 ring-blue-400 ring-offset-1"
-                                              : fileCount > 0
-                                                ? "hover:border-blue-300 hover:shadow-sm"
-                                                : "cursor-default opacity-90"
+                                              : "hover:border-blue-300 hover:shadow-sm"
                                           }`}
                                         >
                                           <div className="flex items-baseline justify-between gap-2">
@@ -2676,6 +2906,14 @@ export default function PersonProfilePage() {
                                               {event.label}
                                             </span>
                                           ) : null}
+                                          {adjustment && adjustment.additionalHours > 0 ? (
+                                            <span
+                                              className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+                                              title={adjustment.note || ""}
+                                            >
+                                              + {formatNumber(adjustment.additionalHours, 2)}h extra
+                                            </span>
+                                          ) : null}
                                           {fileCount > 0 ? (
                                             <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-blue-700">
                                               {fileCount} {fileCount === 1
@@ -2693,14 +2931,17 @@ export default function PersonProfilePage() {
                                     const selectedDayKey = expandedDayKeys.get(key);
                                     if (!selectedDayKey) return null;
                                     const files = dailyFilesByWeek.get(key)?.get(selectedDayKey) ?? [];
-                                    if (files.length === 0) return null;
                                     const dayMeta = days.find((d) => d.dayKey === selectedDayKey);
                                     const headerLabel = `${dayMeta?.weekday ?? ""} ${dayMeta?.label ?? ""}`.trim();
+                                    const adjustmentForDay = adjustmentsByDate.get(selectedDayKey) ?? null;
                                     return (
                                       <DailyFilesPanel
                                         files={files}
                                         headerLabel={headerLabel}
                                         isSpanish={!locale.startsWith("en")}
+                                        dayKey={selectedDayKey}
+                                        adjustment={adjustmentForDay}
+                                        onSaveAdjustment={handleSaveAdjustment}
                                       />
                                     );
                                   })()}
