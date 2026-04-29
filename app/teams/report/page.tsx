@@ -16,7 +16,7 @@ import {
   type DashboardSnapshot,
   type SnapshotPresetMode,
 } from "@/lib/store/dashboard-snapshot";
-import type { WeeklyTeamRow } from "@/lib/metrics/types";
+import type { TeamMemberWeeklyRow, WeeklyTeamRow } from "@/lib/metrics/types";
 
 const isRrePodTeam = (team: string) =>
   /^RRE[A-Z]{2,4}\d+$/i.test(String(team ?? "").trim());
@@ -110,6 +110,18 @@ function getWeekKey(row: { weekLabel: string; firstDay: string; lastDay: string 
 
 type AggregatedPodRow = {
   pod: string;
+  draftFiles: number;
+  qaFiles: number;
+  draftHours: number;
+  qaHours: number;
+  draftRate: number;
+  qaRate: number;
+  qer: number;
+};
+
+type AggregatedPersonRow = {
+  pod: string;
+  name: string;
   draftFiles: number;
   qaFiles: number;
   draftHours: number;
@@ -449,6 +461,89 @@ function TeamsReportContent() {
     return { byPodWeek };
   }, [filteredRows]);
 
+  // Aggregate person-level metrics across selected weeks, per pod.
+  const peopleByPod = useMemo<Map<string, AggregatedPersonRow[]>>(() => {
+    const memberWeekly =
+      snapshot?.teamMembersWeeklyByPreset?.[presetMode] ??
+      snapshot?.teamMembersWeeklyByPreset?.combined ??
+      [];
+    const podSet = new Set(activePods);
+    const weekSet = new Set(visibleWeeks.map((w) => w.weekKey));
+    type Acc = AggregatedPersonRow & {
+      draftRateNum: number;
+      draftRateW: number;
+      qaRateNum: number;
+      qaRateW: number;
+      qerNum: number;
+      qerW: number;
+    };
+    const map = new Map<string, Map<string, Acc>>();
+    for (const r of memberWeekly) {
+      const team = String(r.team ?? "").trim().toUpperCase();
+      if (!podSet.has(team)) continue;
+      const wk = getWeekKey(r);
+      if (!weekSet.has(wk)) continue;
+      let podMap = map.get(team);
+      if (!podMap) {
+        podMap = new Map();
+        map.set(team, podMap);
+      }
+      let entry = podMap.get(r.name);
+      if (!entry) {
+        entry = {
+          name: r.name,
+          pod: team,
+          draftFiles: 0,
+          qaFiles: 0,
+          draftHours: 0,
+          qaHours: 0,
+          draftRate: 0,
+          qaRate: 0,
+          qer: 0,
+          draftRateNum: 0,
+          draftRateW: 0,
+          qaRateNum: 0,
+          qaRateW: 0,
+          qerNum: 0,
+          qerW: 0,
+        };
+        podMap.set(r.name, entry);
+      }
+      const dh = Math.max(r.draftHours, 0);
+      const qh = Math.max(r.qaHours, 0);
+      const qerWeight = Math.max(r.draftHours, 0.01);
+      entry.draftFiles += r.draftFiles;
+      entry.qaFiles += r.qaFiles;
+      entry.draftHours += r.draftHours;
+      entry.qaHours += r.qaHours;
+      entry.draftRateNum += r.draftRate * dh;
+      entry.draftRateW += dh;
+      entry.qaRateNum += r.qaRate * qh;
+      entry.qaRateW += qh;
+      entry.qerNum += r.qer * qerWeight;
+      entry.qerW += qerWeight;
+    }
+    const out = new Map<string, AggregatedPersonRow[]>();
+    for (const [pod, podMap] of map.entries()) {
+      const list: AggregatedPersonRow[] = [];
+      for (const e of podMap.values()) {
+        list.push({
+          name: e.name,
+          pod: e.pod,
+          draftFiles: e.draftFiles,
+          qaFiles: e.qaFiles,
+          draftHours: e.draftHours,
+          qaHours: e.qaHours,
+          draftRate: e.draftRateW > 0 ? e.draftRateNum / e.draftRateW : 0,
+          qaRate: e.qaRateW > 0 ? e.qaRateNum / e.qaRateW : 0,
+          qer: e.qerW > 0 ? e.qerNum / e.qerW : 0,
+        });
+      }
+      out.set(pod, list);
+    }
+    return out;
+  }, [snapshot?.teamMembersWeeklyByPreset, presetMode, activePods, visibleWeeks]);
+
   const periodLabel = useMemo(() => {
     if (visibleWeeks.length === 0) return "Sin semanas";
     const first = visibleWeeks[0];
@@ -767,6 +862,119 @@ function TeamsReportContent() {
               Selecciona al menos un pod con datos para ver el detalle.
             </p>
           ) : null}
+        </div>
+      </section>
+
+      <section className="mt-6">
+        <h2 className="text-base font-semibold text-slate-900">
+          Drafters y QA por pod
+        </h2>
+        <p className="text-[11px] text-slate-500">
+          Personas con actividad en las semanas seleccionadas, agrupadas por pod.
+        </p>
+        <div className="mt-2 space-y-4">
+          {podSummaries.map((p) => {
+            const people = peopleByPod.get(p.pod) ?? [];
+            const drafters = people
+              .filter((r) => r.draftFiles > 0 || r.draftHours > 0)
+              .sort((a, b) => b.draftRate - a.draftRate);
+            const qas = people
+              .filter((r) => r.qaFiles > 0 || r.qaHours > 0)
+              .sort((a, b) => b.qaRate - a.qaRate);
+            if (drafters.length === 0 && qas.length === 0) return null;
+            return (
+              <div
+                key={`people-${p.pod}`}
+                className="overflow-hidden rounded-xl border border-slate-200"
+              >
+                <div className="bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800">
+                  {p.pod} · {drafters.length} drafter{drafters.length === 1 ? "" : "s"} · {qas.length} QA
+                </div>
+
+                {drafters.length > 0 ? (
+                  <div className="border-b border-slate-100">
+                    <p className="bg-blue-50/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-blue-700">
+                      Drafters
+                    </p>
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-3 py-1.5">#</th>
+                          <th className="px-3 py-1.5">Nombre</th>
+                          <th className="px-3 py-1.5 text-right">Files</th>
+                          <th className="px-3 py-1.5 text-right">Horas</th>
+                          <th className="px-3 py-1.5 text-right">Draft Rate</th>
+                          <th className="px-3 py-1.5 text-right">QER %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {drafters.map((d, i) => (
+                          <tr
+                            key={`d-${p.pod}-${d.name}`}
+                            className={i % 2 === 0 ? "bg-white" : "bg-slate-50/40"}
+                          >
+                            <td className="px-3 py-1.5 text-slate-500">{i + 1}</td>
+                            <td className="px-3 py-1.5 font-medium text-slate-900">
+                              {d.name}
+                            </td>
+                            <td className="px-3 py-1.5 text-right">{d.draftFiles}</td>
+                            <td className="px-3 py-1.5 text-right">{formatHours(d.draftHours)}</td>
+                            <td className="px-3 py-1.5 text-right">
+                              {formatNumber(d.draftRate, 0)}
+                            </td>
+                            <td className="px-3 py-1.5 text-right">
+                              {formatNumber(d.qer, 1)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+
+                {qas.length > 0 ? (
+                  <div>
+                    <p className="bg-emerald-50/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                      QA
+                    </p>
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-3 py-1.5">#</th>
+                          <th className="px-3 py-1.5">Nombre</th>
+                          <th className="px-3 py-1.5 text-right">Files</th>
+                          <th className="px-3 py-1.5 text-right">Horas</th>
+                          <th className="px-3 py-1.5 text-right">QA Rate</th>
+                          <th className="px-3 py-1.5 text-right">QER %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {qas.map((q, i) => (
+                          <tr
+                            key={`q-${p.pod}-${q.name}`}
+                            className={i % 2 === 0 ? "bg-white" : "bg-slate-50/40"}
+                          >
+                            <td className="px-3 py-1.5 text-slate-500">{i + 1}</td>
+                            <td className="px-3 py-1.5 font-medium text-slate-900">
+                              {q.name}
+                            </td>
+                            <td className="px-3 py-1.5 text-right">{q.qaFiles}</td>
+                            <td className="px-3 py-1.5 text-right">{formatHours(q.qaHours)}</td>
+                            <td className="px-3 py-1.5 text-right">
+                              {formatNumber(q.qaRate, 0)}
+                            </td>
+                            <td className="px-3 py-1.5 text-right">
+                              {formatNumber(q.qer, 1)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
       </section>
 
