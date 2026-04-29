@@ -768,7 +768,7 @@ export default function PersonReportPage() {
         <SummaryStat label="QER avg" value={`${formatNumber(qerAvg, 1)}%`} />
         <SummaryStat label="Días con novedad" value={String(totals.eventDays)} />
         <SummaryStat
-          label="Horas extra (manual)"
+          label="Horas adicionales (manual)"
           value={formatHours(totals.extraHours)}
           unit="h"
         />
@@ -808,7 +808,7 @@ export default function PersonReportPage() {
                 <th className="px-3 py-2">Hasta</th>
                 <th className="px-3 py-2 text-right">Files D / Q</th>
                 <th className="px-3 py-2 text-right">Horas D / Q</th>
-                <th className="px-3 py-2 text-right">Extra</th>
+                <th className="px-3 py-2 text-right">Adicionales</th>
                 <th className="px-3 py-2 text-right">Draft Rate</th>
                 <th className="px-3 py-2 text-right">QA Rate</th>
                 <th className="px-3 py-2 text-right">QER %</th>
@@ -896,7 +896,7 @@ export default function PersonReportPage() {
                     <th className="px-3 py-1.5 text-right">Files Q</th>
                     <th className="px-3 py-1.5 text-right">Horas D</th>
                     <th className="px-3 py-1.5 text-right">Horas Q</th>
-                    <th className="px-3 py-1.5 text-right">Extra</th>
+                    <th className="px-3 py-1.5 text-right">Adicionales</th>
                     <th className="px-3 py-1.5">Nota / Novedad</th>
                     <th className="px-3 py-1.5 text-right">Total día</th>
                   </tr>

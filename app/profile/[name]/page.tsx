@@ -525,7 +525,7 @@ function AdjustmentEditor({
       <div className="mt-3 grid gap-2 md:grid-cols-[140px_1fr_auto] md:items-end">
         <label className="block text-xs">
           <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-800">
-            {isSpanish ? "Horas extra" : "Extra hours"}
+            {isSpanish ? "Horas adicionales" : "Additional hours"}
           </span>
           <input
             type="number"
@@ -2910,22 +2910,35 @@ export default function PersonProfilePage() {
                                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                                       {locale.startsWith("en") ? "Daily hours" : "Horas diarias"}
                                     </p>
-                                    <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
-                                      <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700 ring-1 ring-blue-200">
-                                        Draft {formatNumber(days.reduce((s, d) => s + d.draftHours, 0), 2)}h
-                                      </span>
-                                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700 ring-1 ring-emerald-200">
-                                        QA {formatNumber(days.reduce((s, d) => s + d.qaHours, 0), 2)}h
-                                      </span>
-                                      <span className={`rounded-full px-2.5 py-1 ring-1 ${hoursTone}`}>
-                                        {locale.startsWith("en") ? "Total" : "Total"}{" "}
-                                        {formatNumber(
-                                          days.reduce((s, d) => s + d.draftHours + d.qaHours, 0),
-                                          2
-                                        )}
-                                        h
-                                      </span>
-                                    </div>
+                                    {(() => {
+                                      const draftSum = days.reduce((s, d) => s + d.draftHours, 0);
+                                      const qaSum = days.reduce((s, d) => s + d.qaHours, 0);
+                                      const adicionalesSum = days.reduce((s, d) => {
+                                        const adj = adjustmentsByDate.get(d.dayKey);
+                                        return s + (adj?.additionalHours ?? 0);
+                                      }, 0);
+                                      const totalSum = draftSum + qaSum + adicionalesSum;
+                                      return (
+                                        <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
+                                          <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700 ring-1 ring-blue-200">
+                                            Draft {formatNumber(draftSum, 2)}h
+                                          </span>
+                                          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700 ring-1 ring-emerald-200">
+                                            QA {formatNumber(qaSum, 2)}h
+                                          </span>
+                                          {adicionalesSum > 0 ? (
+                                            <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700 ring-1 ring-amber-200">
+                                              {locale.startsWith("en") ? "Adicionales" : "Adicionales"}{" "}
+                                              +{formatNumber(adicionalesSum, 2)}h
+                                            </span>
+                                          ) : null}
+                                          <span className={`rounded-full px-2.5 py-1 ring-1 ${hoursTone}`}>
+                                            {locale.startsWith("en") ? "Total" : "Total"}{" "}
+                                            {formatNumber(totalSum, 2)}h
+                                          </span>
+                                        </div>
+                                      );
+                                    })()}
                                   </div>
                                   <div className="mt-3 grid gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
                                     {days.map((d) => {
@@ -2990,7 +3003,7 @@ export default function PersonProfilePage() {
                                               className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
                                               title={adjustment.note || ""}
                                             >
-                                              + {formatNumber(adjustment.additionalHours, 2)}h extra
+                                              + {formatNumber(adjustment.additionalHours, 2)}h adicionales
                                             </span>
                                           ) : null}
                                           {fileCount > 0 ? (
