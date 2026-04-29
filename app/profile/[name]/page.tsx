@@ -2942,21 +2942,24 @@ export default function PersonProfilePage() {
                                   </div>
                                   <div className="mt-3 grid gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
                                     {days.map((d) => {
-                                      const total = d.draftHours + d.qaHours;
-                                      const tone =
-                                        total <= 0
-                                          ? "border-slate-200 bg-white"
-                                          : total >= 8
-                                            ? "border-emerald-200 bg-emerald-50"
-                                            : total >= 6
-                                              ? "border-amber-200 bg-amber-50"
-                                              : "border-rose-200 bg-rose-50";
                                       const dayMapFiles = dailyFilesByWeek.get(key);
                                       const fileCount = dayMapFiles?.get(d.dayKey)?.length ?? 0;
                                       const selectedDayKey = expandedDayKeys.get(key) ?? null;
                                       const isSelected = selectedDayKey === d.dayKey;
                                       const event = personEventsByDate.get(d.dayKey) ?? null;
                                       const adjustment = adjustmentsByDate.get(d.dayKey) ?? null;
+                                      const adicionalesHours = adjustment?.additionalHours ?? 0;
+                                      const total = d.draftHours + d.qaHours + adicionalesHours;
+                                      const isEmpty = total <= 0 && !event;
+                                      const tone = isEmpty
+                                        ? "border-dashed border-slate-300 bg-slate-100/60"
+                                        : total >= 8
+                                          ? "border-emerald-200 bg-emerald-50"
+                                          : total >= 6
+                                            ? "border-amber-200 bg-amber-50"
+                                            : total > 0
+                                              ? "border-rose-200 bg-rose-50"
+                                              : "border-slate-200 bg-white";
                                       return (
                                         <button
                                           key={`day-${key}-${d.dayKey}`}
@@ -2976,21 +2979,32 @@ export default function PersonProfilePage() {
                                             isSelected
                                               ? "ring-2 ring-blue-400 ring-offset-1"
                                               : "hover:border-blue-300 hover:shadow-sm"
-                                          }`}
+                                          } ${isEmpty ? "opacity-70" : ""}`}
                                         >
                                           <div className="flex items-baseline justify-between gap-2">
-                                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                            <p className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${isEmpty ? "text-slate-400" : "text-slate-500"}`}>
                                               {d.weekday}
                                             </p>
-                                            <p className="text-[11px] text-slate-500">{d.label}</p>
+                                            <p className={`text-[11px] ${isEmpty ? "text-slate-400" : "text-slate-500"}`}>{d.label}</p>
                                           </div>
-                                          <p className="mt-1 text-xl font-semibold text-slate-900">
-                                            {formatNumber(total, 2)}
-                                            <span className="ml-1 text-xs font-medium text-slate-500">h</span>
+                                          <p className={`mt-1 text-xl font-semibold ${isEmpty ? "text-slate-400" : "text-slate-900"}`}>
+                                            {isEmpty ? "—" : formatNumber(total, 2)}
+                                            {!isEmpty ? <span className="ml-1 text-xs font-medium text-slate-500">h</span> : null}
                                           </p>
-                                          <p className="mt-1 text-[11px] text-slate-600">
-                                            Draft {formatNumber(d.draftHours, 2)} · QA {formatNumber(d.qaHours, 2)}
-                                          </p>
+                                          {!isEmpty ? (
+                                            <p className="mt-1 text-[11px] text-slate-600">
+                                              Draft {formatNumber(d.draftHours, 2)} · QA {formatNumber(d.qaHours, 2)}
+                                              {adicionalesHours > 0 ? (
+                                                <>
+                                                  {" "}· <span className="font-semibold text-amber-700">Adic {formatNumber(adicionalesHours, 2)}</span>
+                                                </>
+                                              ) : null}
+                                            </p>
+                                          ) : (
+                                            <p className="mt-1 text-[11px] italic text-slate-400">
+                                              {locale.startsWith("en") ? "No work logged" : "Sin actividad"}
+                                            </p>
+                                          )}
                                           {event ? (
                                             <span
                                               className={`mt-1.5 inline-flex w-full items-center justify-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${eventTone(event.code)}`}
