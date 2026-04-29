@@ -117,6 +117,8 @@ type DraftTrendComparisonRow = {
 type ProfileAlertRow = {
   id: string;
   fileName: string;
+  fileUrl: string;
+  propertyAddress: string;
   team: string;
   weekKey: string;
   weekLabel: string;
@@ -1428,6 +1430,8 @@ export default function PersonProfilePage() {
 
     type Aggregated = {
       fileName: string;
+      fileUrl: string;
+      propertyAddress: string;
       team: string;
       weekKey: string;
       weekLabel: string;
@@ -1458,11 +1462,25 @@ export default function PersonProfilePage() {
       const fileName = getFileNameFromUploadRow(row);
       if (!fileName) continue;
 
+      const propertyAddress = normalizeValue(
+        getStrictFieldByAliases(row, ["Property Address", "Address"])
+      );
+      const fileUrlRaw = normalizeValue(
+        getStrictFieldByAliases(row, ["iGUIDE URL", "URL", "Link"])
+      );
+      const fileUrl = isUrl(fileUrlRaw)
+        ? fileUrlRaw
+        : isUrl(fileName)
+          ? fileName
+          : "";
+
       const weekInfo = getWeekInfoFromUploadRow(row);
       const aggregationKey = `${fileName}|||${weekInfo.weekKey}`;
       if (!byFile.has(aggregationKey)) {
         byFile.set(aggregationKey, {
           fileName,
+          fileUrl,
+          propertyAddress,
           team: rowTeam,
           weekKey: weekInfo.weekKey,
           weekLabel: weekInfo.weekLabel,
@@ -1521,6 +1539,8 @@ export default function PersonProfilePage() {
         alerts.push({
           id: `${entry.fileName}|${entry.weekKey}|duration`,
           fileName: entry.fileName,
+          fileUrl: entry.fileUrl,
+          propertyAddress: entry.propertyAddress,
           team: entry.team,
           weekKey: entry.weekKey,
           weekLabel: entry.weekLabel,
@@ -1539,6 +1559,8 @@ export default function PersonProfilePage() {
         alerts.push({
           id: `${entry.fileName}|${entry.weekKey}|errors`,
           fileName: entry.fileName,
+          fileUrl: entry.fileUrl,
+          propertyAddress: entry.propertyAddress,
           team: entry.team,
           weekKey: entry.weekKey,
           weekLabel: entry.weekLabel,
@@ -1560,6 +1582,8 @@ export default function PersonProfilePage() {
         alerts.push({
           id: `${entry.fileName}|${entry.weekKey}|size`,
           fileName: entry.fileName,
+          fileUrl: entry.fileUrl,
+          propertyAddress: entry.propertyAddress,
           team: entry.team,
           weekKey: entry.weekKey,
           weekLabel: entry.weekLabel,
@@ -1578,6 +1602,8 @@ export default function PersonProfilePage() {
         alerts.push({
           id: `${entry.fileName}|${entry.weekKey}|multi-drafter`,
           fileName: entry.fileName,
+          fileUrl: entry.fileUrl,
+          propertyAddress: entry.propertyAddress,
           team: entry.team,
           weekKey: entry.weekKey,
           weekLabel: entry.weekLabel,
@@ -1599,6 +1625,8 @@ export default function PersonProfilePage() {
         alerts.push({
           id: `${entry.fileName}|${entry.weekKey}|qa-abnormal`,
           fileName: entry.fileName,
+          fileUrl: entry.fileUrl,
+          propertyAddress: entry.propertyAddress,
           team: entry.team,
           weekKey: entry.weekKey,
           weekLabel: entry.weekLabel,
@@ -3018,64 +3046,88 @@ export default function PersonProfilePage() {
                   </p>
                 ) : (
                   <div className="max-h-[420px] overflow-auto pr-1">
-                    <div className="space-y-3">
-                      {filteredProfileAlerts.map((alert) => (
-                        <article
-                          key={alert.id}
-                          className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-                        >
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap gap-2 text-xs">
-                                <span
-                                  className={`rounded-full border px-3 py-1 font-semibold uppercase ${getAlertToneClasses(
-                                    alert.severity
-                                  )}`}
-                                >
-                                  {alert.severity}
-                                </span>
-                                <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
-                                  {alert.weekLabel}
-                                </span>
-                                <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
-                                  {alert.firstDay} - {alert.lastDay}
-                                </span>
-                              </div>
-
-                              {isUrl(alert.fileName) ? (
-                                <a
-                                  href={alert.fileName}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="mt-3 block break-all text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 transition hover:text-blue-700 hover:decoration-blue-400"
-                                >
-                                  {alert.fileName}
-                                </a>
-                              ) : (
-                                <p className="mt-3 break-all text-sm font-semibold text-slate-900">
-                                  {alert.fileName}
-                                </p>
-                              )}
-                              <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-                                <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
-                                  Drafter: {alert.drafter}
-                                </span>
-                                <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
-                                  QA: {alert.qa}
-                                </span>
+                    <div className="space-y-2">
+                      {filteredProfileAlerts.map((alert) => {
+                        const titleText =
+                          alert.propertyAddress ||
+                          (isUrl(alert.fileName) ? "" : alert.fileName) ||
+                          alert.fileUrl ||
+                          "(sin nombre)";
+                        return (
+                          <details
+                            key={alert.id}
+                            className="group rounded-2xl border border-slate-200 bg-white shadow-sm"
+                          >
+                            <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-3 hover:bg-slate-50">
+                              <span
+                                className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase ${getAlertToneClasses(
+                                  alert.severity
+                                )}`}
+                              >
+                                {alert.severity}
+                              </span>
+                              <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                                {alert.weekLabel}
+                              </span>
+                              <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[10px] font-semibold text-amber-800 ring-1 ring-amber-200">
+                                {alert.issue}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">
+                                {titleText}
+                              </span>
+                              <svg
+                                viewBox="0 0 20 20"
+                                fill="none"
+                                aria-hidden="true"
+                                className="h-4 w-4 shrink-0 text-slate-400 transition group-open:rotate-180"
+                              >
+                                <path d="m5 7 5 6 5-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                              </svg>
+                            </summary>
+                            <div className="border-t border-slate-100 px-4 py-3">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1 space-y-2">
+                                  <div className="flex flex-wrap gap-2 text-xs">
+                                    <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                      {alert.firstDay} - {alert.lastDay}
+                                    </span>
+                                    <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                      {alert.team}
+                                    </span>
+                                  </div>
+                                  {alert.fileUrl ? (
+                                    <a
+                                      href={alert.fileUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="block break-all text-[11px] text-blue-700 underline decoration-blue-200 underline-offset-2 hover:decoration-blue-500"
+                                    >
+                                      {alert.fileUrl}
+                                    </a>
+                                  ) : null}
+                                  <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+                                    <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
+                                      Drafter: {alert.drafter}
+                                    </span>
+                                    <span className="rounded-full bg-slate-50 px-3 py-1 ring-1 ring-slate-200">
+                                      QA: {alert.qa}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="min-w-[220px] rounded-2xl bg-slate-50 px-4 py-3">
+                                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                    Issue
+                                  </p>
+                                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                                    {alert.issue}
+                                  </p>
+                                  <p className="mt-2 text-sm text-slate-600">{alert.value}</p>
+                                </div>
                               </div>
                             </div>
-
-                            <div className="min-w-[220px] rounded-2xl bg-slate-50 px-4 py-3">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                                Issue
-                              </p>
-                              <p className="mt-1 text-sm font-semibold text-slate-900">{alert.issue}</p>
-                              <p className="mt-2 text-sm text-slate-600">{alert.value}</p>
-                            </div>
-                          </div>
-                        </article>
-                      ))}
+                          </details>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
