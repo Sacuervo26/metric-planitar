@@ -2638,7 +2638,10 @@ export default function PersonProfilePage() {
               </div>
             </div>
             <div className="mt-5 overflow-hidden rounded-[24px] border border-slate-200">
-              <div className="max-h-[430px] overflow-auto">
+              <div
+                className="overflow-auto resize-y"
+                style={{ height: 600, minHeight: 300, maxHeight: "80vh" }}
+              >
                 <table className="min-w-full border-separate border-spacing-0 text-sm">
                   <thead>
                     <tr className="sticky top-0 z-10 bg-slate-950 text-left text-xs uppercase tracking-[0.14em] text-slate-200">
@@ -3087,19 +3090,19 @@ export default function PersonProfilePage() {
             </div>
           </section>
 
-          <section className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+          <details className="group rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm">
+            <summary className="flex cursor-pointer list-none flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Profile alerts</p>
                 <h2 className="mt-2 font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
                   Alerts related to {personName}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Only files where this person appears as Drafter or QA are shown here.
+                  Only files where this person appears as Drafter or QA are shown here. Click to expand.
                 </p>
               </div>
 
-              <div className="flex flex-wrap gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="rounded-full bg-slate-100 px-3 py-1.5 font-semibold text-slate-700">
                   {alertsLoading ? "Loading..." : `${alertSummary.total} alerts`}
                 </span>
@@ -3109,8 +3112,16 @@ export default function PersonProfilePage() {
                 <span className="rounded-full bg-amber-50 px-3 py-1.5 font-semibold text-amber-700">
                   {alertsLoading ? "-" : `${alertSummary.issueCount} issues`}
                 </span>
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  aria-hidden="true"
+                  className="ml-1 h-5 w-5 shrink-0 text-slate-500 transition group-open:rotate-180"
+                >
+                  <path d="m5 7 5 6 5-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
               </div>
-            </div>
+            </summary>
 
             <div className="mt-4 grid gap-3 lg:grid-cols-[320px_1fr]">
               <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
@@ -3233,7 +3244,7 @@ export default function PersonProfilePage() {
                 )}
               </div>
             </div>
-          </section>
+          </details>
         </>
       )}
 
