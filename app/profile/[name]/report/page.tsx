@@ -193,9 +193,11 @@ const WEEKDAY_ES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 function buildPersonReport(
   uploadRows: ReadonlyArray<CsvRow>,
   events: ReadonlyMap<string, ScheduleEvent>,
-  adjustments: ReadonlyMap<string, ManualDayAdjustment>,
+  adjustmentsList: ReadonlyArray<ManualDayAdjustment>,
   normalizedTargetName: string
 ): WeekBucket[] {
+  const adjustments = new Map<string, ManualDayAdjustment>();
+  for (const a of adjustmentsList) adjustments.set(a.isoDate, a);
   const dayMap = new Map<string, DayBucket>();
   const seenRowKeys = new Set<string>();
 
@@ -534,10 +536,10 @@ export default function PersonReportPage() {
       buildPersonReport(
         uploadRows,
         personEvents,
-        adjustmentsByDate,
+        adjustments,
         normalizedPersonName
       ),
-    [uploadRows, personEvents, adjustmentsByDate, normalizedPersonName]
+    [uploadRows, personEvents, adjustments, normalizedPersonName]
   );
 
   // Try to overlay authoritative weekly draftRate / qaRate / qer from snapshot
@@ -896,57 +898,91 @@ export default function PersonReportPage() {
                     <th className="px-3 py-1.5 text-right">Horas Q</th>
                     <th className="px-3 py-1.5 text-right">Extra</th>
                     <th className="px-3 py-1.5">Nota / Novedad</th>
+                    <th className="px-3 py-1.5 text-right">Total día</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {w.days.map((d, i) => (
-                    <tr
-                      key={`day-${w.weekKey}-${d.isoDate}`}
-                      className={i % 2 === 0 ? "bg-white" : "bg-slate-50/40"}
-                    >
-                      <td className="px-3 py-1.5 font-medium">{d.weekday}</td>
-                      <td className="px-3 py-1.5 text-slate-600">
-                        {d.date.toLocaleDateString("es-CO")}
-                      </td>
-                      <td className="px-3 py-1.5 text-right">{d.draftFiles || "—"}</td>
-                      <td className="px-3 py-1.5 text-right">{d.qaFiles || "—"}</td>
-                      <td className="px-3 py-1.5 text-right">
-                        {d.draftHours > 0 ? formatHours(d.draftHours) : "—"}
-                      </td>
-                      <td className="px-3 py-1.5 text-right">
-                        {d.qaHours > 0 ? formatHours(d.qaHours) : "—"}
-                      </td>
-                      <td className="px-3 py-1.5 text-right">
-                        {d.adjustment && d.adjustment.additionalHours > 0 ? (
-                          <span className="font-semibold text-amber-700">
-                            +{formatHours(d.adjustment.additionalHours)}h
-                          </span>
-                        ) : (
-                          <span className="text-slate-300">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {d.event ? (
-                            <span
-                              className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${eventTone(d.event.code)}`}
-                            >
-                              {d.event.label}
+                  {w.days.map((d, i) => {
+                    const extra = d.adjustment?.additionalHours ?? 0;
+                    const dayTotal = d.draftHours + d.qaHours + extra;
+                    return (
+                      <tr
+                        key={`day-${w.weekKey}-${d.isoDate}`}
+                        className={i % 2 === 0 ? "bg-white" : "bg-slate-50/40"}
+                      >
+                        <td className="px-3 py-1.5 font-medium">{d.weekday}</td>
+                        <td className="px-3 py-1.5 text-slate-600">
+                          {d.date.toLocaleDateString("es-CO")}
+                        </td>
+                        <td className="px-3 py-1.5 text-right">{d.draftFiles || "—"}</td>
+                        <td className="px-3 py-1.5 text-right">{d.qaFiles || "—"}</td>
+                        <td className="px-3 py-1.5 text-right">
+                          {d.draftHours > 0 ? formatHours(d.draftHours) : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-right">
+                          {d.qaHours > 0 ? formatHours(d.qaHours) : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-right">
+                          {extra > 0 ? (
+                            <span className="font-semibold text-amber-700">
+                              +{formatHours(extra)}h
                             </span>
-                          ) : null}
-                          {d.adjustment?.note ? (
-                            <span className="text-[10px] italic text-amber-800">
-                              {d.adjustment.note}
-                            </span>
-                          ) : null}
-                          {!d.event && !d.adjustment?.note ? (
+                          ) : (
                             <span className="text-slate-300">—</span>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                          )}
+                        </td>
+                        <td className="px-3 py-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {d.event ? (
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${eventTone(d.event.code)}`}
+                              >
+                                {d.event.label}
+                              </span>
+                            ) : null}
+                            {d.adjustment?.note ? (
+                              <span className="text-[10px] italic text-amber-800">
+                                {d.adjustment.note}
+                              </span>
+                            ) : null}
+                            {!d.event && !d.adjustment?.note ? (
+                              <span className="text-slate-300">—</span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="px-3 py-1.5 text-right font-semibold text-slate-900">
+                          {dayTotal > 0 ? `${formatHours(dayTotal)}h` : <span className="text-slate-300">—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t border-slate-300 bg-blue-50/70 text-xs font-semibold">
+                    <td className="px-3 py-2" colSpan={2}>
+                      Total semana
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {w.draftFiles}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {w.qaFiles}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {formatHours(w.draftHours)}h
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {formatHours(w.qaHours)}h
+                    </td>
+                    <td className="px-3 py-2 text-right text-amber-700">
+                      {w.extraHours > 0 ? `+${formatHours(w.extraHours)}h` : "—"}
+                    </td>
+                    <td className="px-3 py-2"></td>
+                    <td className="px-3 py-2 text-right text-blue-800">
+                      {formatHours(w.draftHours + w.qaHours + w.extraHours)}h
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           ))}
