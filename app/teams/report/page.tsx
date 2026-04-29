@@ -572,6 +572,23 @@ function TeamsReportContent() {
           body {
             background: #fff !important;
           }
+          .report-root {
+            max-width: 100% !important;
+          }
+          .report-root .overflow-x-auto {
+            overflow: visible !important;
+          }
+          .report-root td,
+          .report-root th {
+            white-space: nowrap !important;
+          }
+          .report-root td.report-allow-wrap,
+          .report-root th.report-allow-wrap {
+            white-space: normal !important;
+          }
+          .report-root table {
+            font-size: 10px;
+          }
           @page {
             size: landscape;
             margin: 10mm;

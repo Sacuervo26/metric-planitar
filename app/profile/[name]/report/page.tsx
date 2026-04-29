@@ -683,8 +683,29 @@ export default function PersonReportPage() {
           body {
             background: #fff !important;
           }
+          .report-root {
+            max-width: 100% !important;
+          }
+          /* Prevent horizontal scrollbars from clipping table content. */
+          .report-root .overflow-x-auto {
+            overflow: visible !important;
+          }
+          /* Keep numeric cells from wrapping awkwardly across two lines. */
+          .report-root td,
+          .report-root th {
+            white-space: nowrap !important;
+          }
+          .report-root td.report-allow-wrap,
+          .report-root th.report-allow-wrap {
+            white-space: normal !important;
+          }
+          /* Slightly tighter typography for print so wide tables fit. */
+          .report-root table {
+            font-size: 10px;
+          }
           @page {
-            margin: 12mm;
+            size: landscape;
+            margin: 10mm;
           }
         }
       `}</style>
@@ -812,7 +833,7 @@ export default function PersonReportPage() {
                 <th className="px-3 py-2 text-right">Draft Rate</th>
                 <th className="px-3 py-2 text-right">QA Rate</th>
                 <th className="px-3 py-2 text-right">QER %</th>
-                <th className="px-3 py-2">Novedades</th>
+                <th className="report-allow-wrap px-3 py-2">Novedades</th>
               </tr>
             </thead>
             <tbody>
@@ -842,7 +863,7 @@ export default function PersonReportPage() {
                   <td className="px-3 py-2 text-right">{formatNumber(w.draftRate, 0)}</td>
                   <td className="px-3 py-2 text-right">{formatNumber(w.qaRate, 0)}</td>
                   <td className="px-3 py-2 text-right">{formatNumber(w.qer, 1)}</td>
-                  <td className="px-3 py-2">
+                  <td className="report-allow-wrap px-3 py-2">
                     {w.events.size === 0 ? (
                       <span className="text-slate-400">—</span>
                     ) : (
@@ -897,7 +918,7 @@ export default function PersonReportPage() {
                     <th className="px-3 py-1.5 text-right">Horas D</th>
                     <th className="px-3 py-1.5 text-right">Horas Q</th>
                     <th className="px-3 py-1.5 text-right">Adicionales</th>
-                    <th className="px-3 py-1.5">Nota / Novedad</th>
+                    <th className="report-allow-wrap px-3 py-1.5">Nota / Novedad</th>
                     <th className="px-3 py-1.5 text-right">Total día</th>
                   </tr>
                 </thead>
@@ -931,7 +952,7 @@ export default function PersonReportPage() {
                             <span className="text-slate-300">—</span>
                           )}
                         </td>
-                        <td className="px-3 py-1.5">
+                        <td className="report-allow-wrap px-3 py-1.5">
                           <div className="flex flex-wrap items-center gap-1.5">
                             {d.event ? (
                               <span
