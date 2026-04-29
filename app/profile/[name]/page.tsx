@@ -46,9 +46,12 @@ import {
 } from "@/lib/schedule/schedule-types";
 import {
   readAdjustmentsForPerson,
-  saveAdjustment,
+  saveAdjustmentEntries,
   MANUAL_DAY_ADJUSTMENTS_EVENT,
+  getAdjustmentEntries,
+  getAdjustmentTotalHours,
   type ManualDayAdjustment,
+  type ManualDayAdjustmentEntry,
 } from "@/lib/store/manual-day-adjustments";
 import type { CsvRow, PresetMode } from "@/lib/metrics/types";
 import type { TeamMemberSnapshotRow } from "@/lib/store/dashboard-snapshot";
@@ -331,8 +334,7 @@ const DailyFilesPanel = React.memo(function DailyFilesPanel({
   adjustment: ManualDayAdjustment | null;
   onSaveAdjustment: (
     isoDate: string,
-    additionalHours: number,
-    note: string
+    entries: ManualDayAdjustmentEntry[]
   ) => Promise<void>;
 }) {
   return (
@@ -449,6 +451,35 @@ const DailyFilesPanel = React.memo(function DailyFilesPanel({
   );
 });
 
+type DraftEntry = {
+  id: string;
+  hours: string;
+  note: string;
+};
+
+function newEmptyEntry(): DraftEntry {
+  return {
+    id:
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `entry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    hours: "",
+    note: "",
+  };
+}
+
+function adjustmentToDraftEntries(
+  adjustment: ManualDayAdjustment | null
+): DraftEntry[] {
+  const persisted = getAdjustmentEntries(adjustment);
+  if (persisted.length === 0) return [newEmptyEntry()];
+  return persisted.map((e) => ({
+    id: e.id || newEmptyEntry().id,
+    hours: e.hours ? String(e.hours) : "",
+    note: e.note ?? "",
+  }));
+}
+
 function AdjustmentEditor({
   dayKey,
   adjustment,
@@ -458,35 +489,48 @@ function AdjustmentEditor({
   dayKey: string;
   adjustment: ManualDayAdjustment | null;
   isSpanish: boolean;
-  onSave: (
-    isoDate: string,
-    additionalHours: number,
-    note: string
-  ) => Promise<void>;
+  onSave: (isoDate: string, entries: ManualDayAdjustmentEntry[]) => Promise<void>;
 }) {
-  const [hours, setHours] = useState<string>(
-    adjustment?.additionalHours ? String(adjustment.additionalHours) : ""
+  const [drafts, setDrafts] = useState<DraftEntry[]>(() =>
+    adjustmentToDraftEntries(adjustment)
   );
-  const [note, setNote] = useState<string>(adjustment?.note ?? "");
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<string>("");
 
-  // Reset fields when the adjustment for this day changes externally.
+  // Reset fields when the adjustment for this day changes externally
+  // (e.g., persisted save from a different tab).
   useEffect(() => {
-    setHours(
-      adjustment?.additionalHours ? String(adjustment.additionalHours) : ""
-    );
-    setNote(adjustment?.note ?? "");
+    setDrafts(adjustmentToDraftEntries(adjustment));
     setFeedback("");
-  }, [adjustment?.additionalHours, adjustment?.note, dayKey]);
+  }, [adjustment?.updatedAt, dayKey]);
+
+  const updateDraft = (id: string, patch: Partial<DraftEntry>) => {
+    setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  };
+
+  const removeDraft = (id: string) => {
+    setDrafts((prev) => {
+      const next = prev.filter((d) => d.id !== id);
+      return next.length === 0 ? [newEmptyEntry()] : next;
+    });
+  };
+
+  const addDraft = () => {
+    setDrafts((prev) => [...prev, newEmptyEntry()]);
+  };
 
   const handleSave = async () => {
     setSaving(true);
     setFeedback("");
     try {
-      const numericHours = Number(hours);
-      const safeHours = Number.isFinite(numericHours) && numericHours > 0 ? numericHours : 0;
-      await onSave(dayKey, safeHours, note);
+      const entries: ManualDayAdjustmentEntry[] = drafts
+        .map((d) => ({
+          id: d.id,
+          hours: Math.max(0, Number(d.hours) || 0),
+          note: d.note.trim(),
+        }))
+        .filter((e) => e.hours > 0 || e.note.length > 0);
+      await onSave(dayKey, entries);
       setFeedback(isSpanish ? "Guardado ✓" : "Saved ✓");
       setTimeout(() => setFeedback(""), 1800);
     } catch {
@@ -496,13 +540,12 @@ function AdjustmentEditor({
     }
   };
 
-  const handleClear = async () => {
+  const handleClearAll = async () => {
     setSaving(true);
     setFeedback("");
     try {
-      await onSave(dayKey, 0, "");
-      setHours("");
-      setNote("");
+      await onSave(dayKey, []);
+      setDrafts([newEmptyEntry()]);
       setFeedback(isSpanish ? "Eliminado ✓" : "Removed ✓");
       setTimeout(() => setFeedback(""), 1800);
     } catch {
@@ -512,72 +555,104 @@ function AdjustmentEditor({
     }
   };
 
+  const totalHours = drafts.reduce(
+    (s, d) => s + Math.max(0, Number(d.hours) || 0),
+    0
+  );
+
   return (
     <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
-        {isSpanish ? "Horas adicionales (manual)" : "Additional hours (manual)"}
-      </p>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+          {isSpanish ? "Horas adicionales (manual)" : "Additional hours (manual)"}
+        </p>
+        {totalHours > 0 ? (
+          <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-semibold text-amber-800">
+            {isSpanish ? "Total" : "Total"} +{totalHours.toFixed(2)}h
+          </span>
+        ) : null}
+      </div>
       <p className="mt-1 text-[11px] text-amber-900/70">
         {isSpanish
-          ? "Para horas trabajadas que no se reflejaron en el CSV (archivos que terminó otra persona, soporte, reuniones, etc.). Las suma el reporte y queda registrada con tu nota."
-          : "For hours worked that did not appear in the CSV (files finished by someone else, support, meetings). The report adds them with the note."}
+          ? "Para horas trabajadas que no se reflejaron en el CSV (archivos que terminó otra persona, soporte, reuniones, etc.). Puedes agregar varias anotaciones."
+          : "For hours worked that did not appear in the CSV (files finished by someone else, support, meetings). You can add multiple entries."}
       </p>
-      <div className="mt-3 grid gap-2 md:grid-cols-[140px_1fr_auto] md:items-end">
-        <label className="block text-xs">
-          <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-800">
-            {isSpanish ? "Horas adicionales" : "Additional hours"}
-          </span>
-          <input
-            type="number"
-            min="0"
-            step="0.25"
-            value={hours}
-            onChange={(e) => setHours(e.target.value)}
-            placeholder="0.0"
-            className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm font-mono text-slate-900 outline-none focus:border-amber-500"
-          />
-        </label>
-        <label className="block text-xs">
-          <span className="block text-[10px] font-semibold uppercase tracking-wide text-amber-800">
-            {isSpanish ? "Nota del Shift Leader" : "Shift Leader note"}
-          </span>
-          <input
-            type="text"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder={
-              isSpanish
-                ? "Ej: Trabajó 2h en File X que terminó Juan"
-                : "Ex: Worked 2h on File X finished by Juan"
-            }
-            className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none focus:border-amber-500"
-          />
-        </label>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving}
-            className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:opacity-60"
+
+      <div className="mt-3 space-y-2">
+        {drafts.map((d, idx) => (
+          <div
+            key={d.id}
+            className="grid gap-2 md:grid-cols-[24px_120px_1fr_auto] md:items-center"
           >
-            {saving ? "..." : isSpanish ? "Guardar" : "Save"}
-          </button>
-          {adjustment ? (
+            <span className="hidden text-[10px] font-semibold uppercase text-amber-800 md:block">
+              #{idx + 1}
+            </span>
+            <input
+              type="number"
+              min="0"
+              step="0.25"
+              value={d.hours}
+              onChange={(e) => updateDraft(d.id, { hours: e.target.value })}
+              placeholder="0.0"
+              className="w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm font-mono text-slate-900 outline-none focus:border-amber-500"
+            />
+            <input
+              type="text"
+              value={d.note}
+              onChange={(e) => updateDraft(d.id, { note: e.target.value })}
+              placeholder={
+                isSpanish
+                  ? "Ej: Trabajó 2h en File X que terminó Juan"
+                  : "Ex: Worked 2h on File X finished by Juan"
+              }
+              className="w-full rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none focus:border-amber-500"
+            />
             <button
               type="button"
-              onClick={handleClear}
+              onClick={() => removeDraft(d.id)}
               disabled={saving}
               className="rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
-              title={isSpanish ? "Eliminar registro" : "Remove entry"}
+              title={isSpanish ? "Eliminar esta anotación" : "Remove this entry"}
+              aria-label={isSpanish ? "Eliminar anotación" : "Remove entry"}
             >
               ×
             </button>
-          ) : null}
-        </div>
+          </div>
+        ))}
       </div>
-      {feedback ? (
-        <p className="mt-2 text-[11px] font-semibold text-amber-700">{feedback}</p>
-      ) : null}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={addDraft}
+          disabled={saving}
+          className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
+        >
+          + {isSpanish ? "Agregar anotación" : "Add entry"}
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:opacity-60"
+        >
+          {saving ? "..." : isSpanish ? "Guardar" : "Save"}
+        </button>
+        {adjustment ? (
+          <button
+            type="button"
+            onClick={handleClearAll}
+            disabled={saving}
+            className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-60"
+          >
+            {isSpanish ? "Eliminar todo" : "Remove all"}
+          </button>
+        ) : null}
+        {feedback ? (
+          <span className="text-[11px] font-semibold text-amber-700">{feedback}</span>
+        ) : null}
+      </div>
+
       {adjustment?.updatedAt ? (
         <p className="mt-2 text-[10px] text-amber-700/70">
           {isSpanish ? "Actualizado" : "Updated"}{" "}
@@ -1050,15 +1125,9 @@ export default function PersonProfilePage() {
 
   const handleSaveAdjustment = async (
     isoDate: string,
-    additionalHours: number,
-    note: string
+    entries: ManualDayAdjustmentEntry[]
   ) => {
-    await saveAdjustment({
-      normalizedPersonName,
-      isoDate,
-      additionalHours,
-      note,
-    });
+    await saveAdjustmentEntries(normalizedPersonName, isoDate, entries);
     // The event listener above will refresh state.
   };
 
@@ -2719,8 +2788,9 @@ export default function PersonProfilePage() {
                             }
                           }
                           const adj = adjustmentsByDate.get(dayKey);
-                          if (adj && adj.additionalHours > 0) {
-                            weekAdicionales += adj.additionalHours;
+                          const adjTotal = getAdjustmentTotalHours(adj);
+                          if (adjTotal > 0) {
+                            weekAdicionales += adjTotal;
                           }
                           if (existingDayKeys.has(dayKey)) continue;
                           const weekday = date.getDay();
@@ -2940,7 +3010,7 @@ export default function PersonProfilePage() {
                                       const qaSum = days.reduce((s, d) => s + d.qaHours, 0);
                                       const adicionalesSum = days.reduce((s, d) => {
                                         const adj = adjustmentsByDate.get(d.dayKey);
-                                        return s + (adj?.additionalHours ?? 0);
+                                        return s + getAdjustmentTotalHours(adj);
                                       }, 0);
                                       const totalSum = draftSum + qaSum + adicionalesSum;
                                       return (
@@ -2973,7 +3043,7 @@ export default function PersonProfilePage() {
                                       const isSelected = selectedDayKey === d.dayKey;
                                       const event = personEventsByDate.get(d.dayKey) ?? null;
                                       const adjustment = adjustmentsByDate.get(d.dayKey) ?? null;
-                                      const adicionalesHours = adjustment?.additionalHours ?? 0;
+                                      const adicionalesHours = getAdjustmentTotalHours(adjustment);
                                       const total = d.draftHours + d.qaHours + adicionalesHours;
                                       const isEmpty = total <= 0 && !event;
                                       const tone = isEmpty
@@ -3037,12 +3107,15 @@ export default function PersonProfilePage() {
                                               {event.label}
                                             </span>
                                           ) : null}
-                                          {adjustment && adjustment.additionalHours > 0 ? (
+                                          {adicionalesHours > 0 ? (
                                             <span
                                               className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
-                                              title={adjustment.note || ""}
+                                              title={getAdjustmentEntries(adjustment)
+                                                .map((e) => e.note)
+                                                .filter(Boolean)
+                                                .join(" · ") || ""}
                                             >
-                                              + {formatNumber(adjustment.additionalHours, 2)}h adicionales
+                                              + {formatNumber(adicionalesHours, 2)}h adicionales
                                             </span>
                                           ) : null}
                                           {fileCount > 0 ? (

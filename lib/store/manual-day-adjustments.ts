@@ -1,14 +1,53 @@
 "use client";
 
+export type ManualDayAdjustmentEntry = {
+  /** Stable local id (UUID-like string). */
+  id: string;
+  hours: number;
+  note: string;
+};
+
 export type ManualDayAdjustment = {
   /** Lower-cased, accent-stripped person name. */
   normalizedPersonName: string;
   /** YYYY-MM-DD */
   isoDate: string;
-  additionalHours: number;
-  note: string;
+  /** New shape: list of separate entries. Older records may only have
+   *  `additionalHours` + `note`; getEntries() / getTotalHours() normalize. */
+  entries?: ManualDayAdjustmentEntry[];
+  /** Legacy: single-entry totals. Kept for backward compat with older saves. */
+  additionalHours?: number;
+  note?: string;
   updatedAt: string;
 };
+
+export function getAdjustmentEntries(
+  adj: ManualDayAdjustment | null | undefined
+): ManualDayAdjustmentEntry[] {
+  if (!adj) return [];
+  if (Array.isArray(adj.entries) && adj.entries.length > 0) {
+    return adj.entries;
+  }
+  if ((adj.additionalHours ?? 0) > 0 || (adj.note ?? "").trim() !== "") {
+    return [
+      {
+        id: "legacy",
+        hours: Number(adj.additionalHours ?? 0) || 0,
+        note: String(adj.note ?? ""),
+      },
+    ];
+  }
+  return [];
+}
+
+export function getAdjustmentTotalHours(
+  adj: ManualDayAdjustment | null | undefined
+): number {
+  return getAdjustmentEntries(adj).reduce(
+    (sum, e) => sum + (Number.isFinite(e.hours) ? e.hours : 0),
+    0
+  );
+}
 
 const ADJUST_DB_NAME = "metric-planitar-day-adjustments-db";
 const ADJUST_DB_VERSION = 1;
@@ -66,23 +105,44 @@ export async function readAdjustmentsForPerson(
   return all.filter((a) => a.normalizedPersonName === normalizedPersonName);
 }
 
-export async function saveAdjustment(
-  adjustment: Omit<ManualDayAdjustment, "updatedAt">
+export async function saveAdjustmentEntries(
+  normalizedPersonName: string,
+  isoDate: string,
+  entries: ReadonlyArray<ManualDayAdjustmentEntry>
 ): Promise<void> {
   if (typeof window === "undefined") return;
   const db = await openAdjustmentsDb();
+
+  // Normalize: drop empty entries (no hours and empty note), clamp negatives.
+  const clean: ManualDayAdjustmentEntry[] = entries
+    .map((e) => ({
+      id: String(e.id || crypto.randomUUID()),
+      hours: Math.max(0, Number(e.hours) || 0),
+      note: String(e.note ?? "").trim(),
+    }))
+    .filter((e) => e.hours > 0 || e.note.length > 0);
+
+  const totalHours = clean.reduce((s, e) => s + e.hours, 0);
+  const combinedNote = clean
+    .map((e) => e.note)
+    .filter(Boolean)
+    .join(" · ");
+
   const payload: ManualDayAdjustment = {
-    ...adjustment,
-    additionalHours: Math.max(0, Number(adjustment.additionalHours) || 0),
-    note: String(adjustment.note ?? "").trim(),
+    normalizedPersonName,
+    isoDate,
+    entries: clean,
+    // Keep legacy mirror so older readers still see something coherent.
+    additionalHours: totalHours,
+    note: combinedNote,
     updatedAt: new Date().toISOString(),
   };
+
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(ADJUST_STORE, "readwrite");
     const store = tx.objectStore(ADJUST_STORE);
-    const key = adjustmentKey(payload.normalizedPersonName, payload.isoDate);
-    if (payload.additionalHours <= 0 && !payload.note) {
-      // Empty payload → remove the entry to keep the store clean.
+    const key = adjustmentKey(normalizedPersonName, isoDate);
+    if (clean.length === 0) {
       const del = store.delete(key);
       del.onsuccess = () => resolve();
       del.onerror = () => reject(del.error ?? new Error("delete error"));
@@ -96,6 +156,19 @@ export async function saveAdjustment(
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(MANUAL_DAY_ADJUSTMENTS_EVENT));
   }
+}
+
+/** @deprecated kept for older callers — saves a single entry. Prefer saveAdjustmentEntries. */
+export async function saveAdjustment(
+  adjustment: Omit<ManualDayAdjustment, "updatedAt" | "entries">
+): Promise<void> {
+  await saveAdjustmentEntries(adjustment.normalizedPersonName, adjustment.isoDate, [
+    {
+      id: "single",
+      hours: Math.max(0, Number(adjustment.additionalHours ?? 0) || 0),
+      note: String(adjustment.note ?? "").trim(),
+    },
+  ]);
 }
 
 export async function deleteAdjustment(

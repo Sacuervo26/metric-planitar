@@ -30,6 +30,8 @@ import {
 import {
   readAdjustmentsForPerson,
   MANUAL_DAY_ADJUSTMENTS_EVENT,
+  getAdjustmentTotalHours,
+  getAdjustmentEntries,
   type ManualDayAdjustment,
 } from "@/lib/store/manual-day-adjustments";
 
@@ -335,9 +337,12 @@ function buildPersonReport(
     week.qaHours += day.qaHours;
     week.draftFiles += day.draftFiles;
     week.qaFiles += day.qaFiles;
-    if (day.adjustment && day.adjustment.additionalHours > 0) {
-      week.extraHours += day.adjustment.additionalHours;
-      week.adjustments.push(day.adjustment);
+    if (day.adjustment) {
+      const total = getAdjustmentTotalHours(day.adjustment);
+      if (total > 0) {
+        week.extraHours += total;
+        week.adjustments.push(day.adjustment);
+      }
     }
     if (day.event) {
       const existing = week.events.get(day.event.code);
@@ -924,7 +929,8 @@ export default function PersonReportPage() {
                 </thead>
                 <tbody>
                   {w.days.map((d, i) => {
-                    const extra = d.adjustment?.additionalHours ?? 0;
+                    const extra = getAdjustmentTotalHours(d.adjustment);
+                    const adjEntries = getAdjustmentEntries(d.adjustment);
                     const dayTotal = d.draftHours + d.qaHours + extra;
                     return (
                       <tr
@@ -961,12 +967,17 @@ export default function PersonReportPage() {
                                 {d.event.label}
                               </span>
                             ) : null}
-                            {d.adjustment?.note ? (
-                              <span className="text-[10px] italic text-amber-800">
-                                {d.adjustment.note}
-                              </span>
+                            {adjEntries.length > 0 ? (
+                              <ul className="space-y-0.5 text-[10px] italic text-amber-800">
+                                {adjEntries.map((entry) => (
+                                  <li key={`note-${entry.id}`}>
+                                    {entry.hours > 0 ? `+${formatHours(entry.hours)}h ` : ""}
+                                    {entry.note || (entry.hours > 0 ? "(sin nota)" : "")}
+                                  </li>
+                                ))}
+                              </ul>
                             ) : null}
-                            {!d.event && !d.adjustment?.note ? (
+                            {!d.event && adjEntries.length === 0 ? (
                               <span className="text-slate-300">—</span>
                             ) : null}
                           </div>
