@@ -22,7 +22,11 @@ app.set("trust proxy", 1);
 app.use(
   cors({
     origin: CORS_ORIGIN,
-    allowedHeaders: ["Content-Type", "X-API-Key"],
+    // Authorization is needed for the JWT-based /auth/me and
+    // /auth/change-password endpoints — without it the browser's CORS
+    // preflight rejects the header and the fetch fails with
+    // "Failed to fetch".
+    allowedHeaders: ["Content-Type", "X-API-Key", "Authorization"],
   })
 );
 app.use(express.json({ limit: "50mb" }));

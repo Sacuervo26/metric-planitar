@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth/use-auth";
 import { changePasswordRequest } from "@/lib/auth/auth-client";
+import { PasswordInput } from "@/components/auth/password-input";
 
 export default function ChangePasswordPage() {
   const router = useRouter();
@@ -65,49 +66,32 @@ export default function ChangePasswordPage() {
         </div>
 
         <form onSubmit={onSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-              Contraseña actual (la temporal)
-            </label>
-            <input
-              type="password"
-              required
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-            />
-          </div>
+          <PasswordInput
+            label="Contraseña actual (la temporal)"
+            required
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            autoComplete="current-password"
+          />
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-              Nueva contraseña
-            </label>
-            <input
-              type="password"
-              required
-              minLength={8}
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-            />
-            <p className="mt-1 text-xs text-slate-500">
-              Mínimo 8 caracteres, incluye una letra y un número.
-            </p>
-          </div>
+          <PasswordInput
+            label="Nueva contraseña"
+            required
+            minLength={8}
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            autoComplete="new-password"
+            hint="Mínimo 8 caracteres, incluye una letra y un número."
+          />
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-              Confirma la nueva contraseña
-            </label>
-            <input
-              type="password"
-              required
-              minLength={8}
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-            />
-          </div>
+          <PasswordInput
+            label="Confirma la nueva contraseña"
+            required
+            minLength={8}
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            autoComplete="new-password"
+          />
 
           {error ? (
             <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
