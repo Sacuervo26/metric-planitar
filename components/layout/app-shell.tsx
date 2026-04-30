@@ -8,6 +8,15 @@ import {
   readPersistedUploadBatches,
   writePersistedUploadBatches,
 } from "@/lib/store/upload-batches";
+import { EditorIdentityPrompt } from "@/components/layout/editor-identity-prompt";
+import {
+  EDITOR_IDENTITY_EVENT,
+  readEditorIdentity,
+  writeEditorIdentity,
+} from "@/lib/store/editor-identity";
+import { readAllAdjustmentsLocal } from "@/lib/store/manual-day-adjustments";
+import { readLocalScheduleBatches } from "@/lib/store/schedule-batches";
+import { migrateLocalToCloudIfNeeded } from "@/lib/api/initial-sync";
 import {
   DASHBOARD_SNAPSHOT_EVENT,
   DASHBOARD_SNAPSHOT_KEY,
@@ -189,6 +198,14 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const [indexedFiles, setIndexedFiles] = useState<Array<{ file: string; team: string }>>([]);
   const [hasLoadedFileIndex, setHasLoadedFileIndex] = useState(false);
   const [hasAttemptedCloudBootstrap, setHasAttemptedCloudBootstrap] = useState(false);
+  const [editorIdentity, setEditorIdentity] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEditorIdentity(readEditorIdentity());
+    const onUpdate = () => setEditorIdentity(readEditorIdentity());
+    window.addEventListener(EDITOR_IDENTITY_EVENT, onUpdate);
+    return () => window.removeEventListener(EDITOR_IDENTITY_EVENT, onUpdate);
+  }, []);
 
   useEffect(() => {
     setHydrated(true);
@@ -261,6 +278,25 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     }
 
     void bootstrapCloudState();
+
+    // One-time push of local Adicionales / Schedule to the backend if the
+    // backend tables are still empty. Runs in parallel with the dashboard
+    // bootstrap; failures are logged inside migrateLocalToCloudIfNeeded.
+    void (async () => {
+      try {
+        const [localAdjustments, localScheduleStore] = await Promise.all([
+          readAllAdjustmentsLocal(),
+          readLocalScheduleBatches(),
+        ]);
+        if (cancelled) return;
+        await migrateLocalToCloudIfNeeded({
+          localAdjustments,
+          localSchedule: localScheduleStore.batches ?? [],
+        });
+      } catch {
+        // ignore — local state still works
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -474,12 +510,24 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         >
           {!collapsed ? (
             <>
-              <p className="text-xs uppercase tracking-wider text-slate-400">Workspace</p>
-              <p className="mt-2 text-sm font-semibold text-slate-900">Sebastian Cuervo</p>
-              <p className="text-xs text-slate-500">RRECO Analytics</p>
+              <p className="text-xs uppercase tracking-wider text-slate-400">
+                {language === "es" ? "Editando como" : "Editing as"}
+              </p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">
+                {editorIdentity || (language === "es" ? "Sin identidad" : "No identity")}
+              </p>
+              <button
+                type="button"
+                onClick={() => writeEditorIdentity("")}
+                className="mt-1 text-[11px] font-medium text-blue-700 hover:underline"
+              >
+                {language === "es" ? "Cambiar nombre" : "Change name"}
+              </button>
             </>
           ) : (
-            <div className="grid place-items-center text-xs font-semibold text-slate-700">SC</div>
+            <div className="grid place-items-center text-xs font-semibold text-slate-700">
+              {editorIdentity ? editorIdentity.slice(0, 2).toUpperCase() : "??"}
+            </div>
           )}
         </div>
 
@@ -763,6 +811,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AppLanguageProvider>
       <AppShellInner>{children}</AppShellInner>
+      <EditorIdentityPrompt />
     </AppLanguageProvider>
   );
 }

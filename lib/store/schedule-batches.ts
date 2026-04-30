@@ -4,6 +4,12 @@ import {
   EMPTY_PERSISTED_SCHEDULE_BATCHES,
   type PersistedScheduleBatches,
 } from "@/lib/schedule/schedule-types";
+import {
+  CLOUD_SYNC_AVAILABLE,
+  cloudListSchedule,
+  cloudReplaceSchedule,
+} from "@/lib/api/cloud-sync";
+import { readEditorIdentity } from "@/lib/store/editor-identity";
 
 const SCHEDULE_DB_NAME = "metric-planitar-schedule-db";
 const SCHEDULE_DB_VERSION = 1;
@@ -31,7 +37,7 @@ function openScheduleDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function readPersistedScheduleBatches(): Promise<PersistedScheduleBatches> {
+export async function readLocalScheduleBatches(): Promise<PersistedScheduleBatches> {
   if (typeof window === "undefined") return EMPTY_PERSISTED_SCHEDULE_BATCHES;
   try {
     const db = await openScheduleDb();
@@ -51,15 +57,11 @@ export async function readPersistedScheduleBatches(): Promise<PersistedScheduleB
   }
 }
 
-export async function writePersistedScheduleBatches(
-  batches: PersistedScheduleBatches
+async function writeLocalScheduleBatches(
+  payload: PersistedScheduleBatches
 ): Promise<void> {
   if (typeof window === "undefined") return;
   const db = await openScheduleDb();
-  const payload: PersistedScheduleBatches = {
-    ...batches,
-    updatedAt: new Date().toISOString(),
-  };
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(SCHEDULE_STORE, "readwrite");
     const store = tx.objectStore(SCHEDULE_STORE);
@@ -68,6 +70,52 @@ export async function writePersistedScheduleBatches(
     request.onerror = () => reject(request.error ?? new Error("Error escribiendo schedule"));
     tx.oncomplete = () => db.close();
   });
+}
+
+export async function readPersistedScheduleBatches(): Promise<PersistedScheduleBatches> {
+  if (CLOUD_SYNC_AVAILABLE) {
+    try {
+      const remote = await cloudListSchedule();
+      const payload: PersistedScheduleBatches = {
+        batches: remote,
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        await writeLocalScheduleBatches(payload);
+      } catch {}
+      return payload;
+    } catch {
+      // fall through
+    }
+  }
+  return readLocalScheduleBatches();
+}
+
+export async function writePersistedScheduleBatches(
+  batches: PersistedScheduleBatches
+): Promise<void> {
+  if (typeof window === "undefined") return;
+  const payload: PersistedScheduleBatches = {
+    ...batches,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (CLOUD_SYNC_AVAILABLE) {
+    try {
+      const updatedBy = readEditorIdentity() || undefined;
+      const remote = await cloudReplaceSchedule(payload.batches, updatedBy);
+      payload.batches = remote;
+    } catch (err) {
+      // Network failure — keep local copy and re-throw so UI can warn.
+      await writeLocalScheduleBatches(payload);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event(SCHEDULE_BATCHES_EVENT));
+      }
+      throw err;
+    }
+  }
+
+  await writeLocalScheduleBatches(payload);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(SCHEDULE_BATCHES_EVENT));
   }

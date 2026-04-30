@@ -1,5 +1,14 @@
 "use client";
 
+import {
+  CLOUD_SYNC_AVAILABLE,
+  cloudAdjustmentToLocal,
+  cloudBulkAdjustments,
+  cloudListAdjustments,
+  cloudUpsertAdjustment,
+} from "@/lib/api/cloud-sync";
+import { readEditorIdentity } from "@/lib/store/editor-identity";
+
 export type ManualDayAdjustmentEntry = {
   /** Stable local id (UUID-like string). */
   id: string;
@@ -18,6 +27,8 @@ export type ManualDayAdjustment = {
   /** Legacy: single-entry totals. Kept for backward compat with older saves. */
   additionalHours?: number;
   note?: string;
+  /** Free-form name of the editor (cloud sync). Optional. */
+  updatedBy?: string | null;
   updatedAt: string;
 };
 
@@ -78,7 +89,7 @@ function openAdjustmentsDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function readAllAdjustments(): Promise<ManualDayAdjustment[]> {
+export async function readAllAdjustmentsLocal(): Promise<ManualDayAdjustment[]> {
   if (typeof window === "undefined") return [];
   try {
     const db = await openAdjustmentsDb();
@@ -98,10 +109,61 @@ export async function readAllAdjustments(): Promise<ManualDayAdjustment[]> {
   }
 }
 
+async function writeLocalAdjustments(
+  adjustments: ReadonlyArray<ManualDayAdjustment>
+): Promise<void> {
+  if (typeof window === "undefined") return;
+  const db = await openAdjustmentsDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ADJUST_STORE, "readwrite");
+    const store = tx.objectStore(ADJUST_STORE);
+    // Replace contents: clear and re-put.
+    const clear = store.clear();
+    clear.onsuccess = () => {
+      for (const adj of adjustments) {
+        store.put(adj, adjustmentKey(adj.normalizedPersonName, adj.isoDate));
+      }
+      resolve();
+    };
+    clear.onerror = () => reject(clear.error ?? new Error("clear error"));
+    tx.oncomplete = () => db.close();
+  });
+}
+
+/**
+ * Reads adjustments. If cloud sync is configured, fetches from the backend
+ * and refreshes the local cache. Falls back to the local cache if the cloud
+ * is unreachable (offline-friendly).
+ */
+export async function readAllAdjustments(): Promise<ManualDayAdjustment[]> {
+  if (CLOUD_SYNC_AVAILABLE) {
+    try {
+      const remote = await cloudListAdjustments();
+      const local = remote.map(cloudAdjustmentToLocal);
+      // Best-effort cache update; don't fail the read if the cache write fails.
+      try {
+        await writeLocalAdjustments(local);
+      } catch {}
+      return local;
+    } catch {
+      // fall through to local cache
+    }
+  }
+  return readAllAdjustmentsLocal();
+}
+
 export async function readAdjustmentsForPerson(
   normalizedPersonName: string
 ): Promise<ManualDayAdjustment[]> {
-  const all = await readAllAdjustments();
+  if (CLOUD_SYNC_AVAILABLE) {
+    try {
+      const remote = await cloudListAdjustments(normalizedPersonName);
+      return remote.map(cloudAdjustmentToLocal);
+    } catch {
+      // fall through
+    }
+  }
+  const all = await readAllAdjustmentsLocal();
   return all.filter((a) => a.normalizedPersonName === normalizedPersonName);
 }
 
@@ -111,7 +173,6 @@ export async function saveAdjustmentEntries(
   entries: ReadonlyArray<ManualDayAdjustmentEntry>
 ): Promise<void> {
   if (typeof window === "undefined") return;
-  const db = await openAdjustmentsDb();
 
   // Normalize: drop empty entries (no hours and empty note), clamp negatives.
   const clean: ManualDayAdjustmentEntry[] = entries
@@ -132,17 +193,42 @@ export async function saveAdjustmentEntries(
     normalizedPersonName,
     isoDate,
     entries: clean,
-    // Keep legacy mirror so older readers still see something coherent.
     additionalHours: totalHours,
     note: combinedNote,
     updatedAt: new Date().toISOString(),
   };
 
+  // 1. Push to backend (source of truth).
+  if (CLOUD_SYNC_AVAILABLE) {
+    try {
+      const updatedBy = readEditorIdentity() || undefined;
+      await cloudUpsertAdjustment({
+        normalizedPersonName,
+        isoDate,
+        entries: clean,
+        updatedBy,
+      });
+    } catch (err) {
+      // Network failure — keep local copy and re-throw so UI can warn.
+      await writeLocalAdjustment(payload);
+      throw err;
+    }
+  }
+
+  // 2. Update local cache.
+  await writeLocalAdjustment(payload);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(MANUAL_DAY_ADJUSTMENTS_EVENT));
+  }
+}
+
+async function writeLocalAdjustment(payload: ManualDayAdjustment): Promise<void> {
+  const db = await openAdjustmentsDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(ADJUST_STORE, "readwrite");
     const store = tx.objectStore(ADJUST_STORE);
-    const key = adjustmentKey(normalizedPersonName, isoDate);
-    if (clean.length === 0) {
+    const key = adjustmentKey(payload.normalizedPersonName, payload.isoDate);
+    if (!payload.entries || payload.entries.length === 0) {
       const del = store.delete(key);
       del.onsuccess = () => resolve();
       del.onerror = () => reject(del.error ?? new Error("delete error"));
@@ -153,9 +239,6 @@ export async function saveAdjustmentEntries(
     }
     tx.oncomplete = () => db.close();
   });
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(MANUAL_DAY_ADJUSTMENTS_EVENT));
-  }
 }
 
 /** @deprecated kept for older callers — saves a single entry. Prefer saveAdjustmentEntries. */
@@ -175,17 +258,5 @@ export async function deleteAdjustment(
   normalizedPersonName: string,
   isoDate: string
 ): Promise<void> {
-  if (typeof window === "undefined") return;
-  const db = await openAdjustmentsDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(ADJUST_STORE, "readwrite");
-    const store = tx.objectStore(ADJUST_STORE);
-    const del = store.delete(adjustmentKey(normalizedPersonName, isoDate));
-    del.onsuccess = () => resolve();
-    del.onerror = () => reject(del.error ?? new Error("delete error"));
-    tx.oncomplete = () => db.close();
-  });
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(MANUAL_DAY_ADJUSTMENTS_EVENT));
-  }
+  await saveAdjustmentEntries(normalizedPersonName, isoDate, []);
 }

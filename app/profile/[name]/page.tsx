@@ -657,6 +657,15 @@ function AdjustmentEditor({
         <p className="mt-2 text-[10px] text-amber-700/70">
           {isSpanish ? "Actualizado" : "Updated"}{" "}
           {new Date(adjustment.updatedAt).toLocaleString("es-CO")}
+          {adjustment.updatedBy ? (
+            <>
+              {" · "}
+              {isSpanish ? "por" : "by"}{" "}
+              <span className="font-semibold text-amber-800">
+                {adjustment.updatedBy}
+              </span>
+            </>
+          ) : null}
         </p>
       ) : null}
     </div>

@@ -6,6 +6,9 @@ const rateLimit = require("express-rate-limit");
 const { sequelize } = require("./models");
 const cloudStateRouter = require("./routes/cloudState");
 const snapshotsRouter = require("./routes/snapshots");
+const adjustmentsRouter = require("./routes/adjustments");
+const scheduleRouter = require("./routes/schedule");
+const personConfigRouter = require("./routes/personConfig");
 const { requireApiKey } = require("./middleware/auth");
 
 const app = express();
@@ -41,6 +44,9 @@ if (!process.env.API_KEY) {
 
 app.use("/cloud-state", cloudStateLimiter, requireApiKey, cloudStateRouter);
 app.use("/snapshots", cloudStateLimiter, requireApiKey, snapshotsRouter);
+app.use("/adjustments", cloudStateLimiter, requireApiKey, adjustmentsRouter);
+app.use("/schedule", cloudStateLimiter, requireApiKey, scheduleRouter);
+app.use("/person-config", cloudStateLimiter, requireApiKey, personConfigRouter);
 
 app.use((err, _req, res, _next) => {
   console.error(err);

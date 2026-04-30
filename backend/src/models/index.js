@@ -5,6 +5,9 @@ const { SnapshotWeeklyRow } = require("./SnapshotWeeklyRow");
 const { SnapshotPresetDistribution } = require("./SnapshotPresetDistribution");
 const { UploadBatch } = require("./UploadBatch");
 const { UploadRow } = require("./UploadRow");
+const { ManualDayAdjustment } = require("./ManualDayAdjustment");
+const { ScheduleBatch } = require("./ScheduleBatchModel");
+const { PersonConfig } = require("./PersonConfig");
 
 Snapshot.hasMany(SnapshotTeam, {
   foreignKey: "snapshotId",
@@ -42,4 +45,7 @@ module.exports = {
   SnapshotPresetDistribution,
   UploadBatch,
   UploadRow,
+  ManualDayAdjustment,
+  ScheduleBatch,
+  PersonConfig,
 };
