@@ -87,6 +87,39 @@ export default function UsersAdminPage() {
         map[cfg.name.toLowerCase()] = cfg;
       }
       setPersonConfigs(map);
+
+      // Mirror the cloud config into the local cache so any /profile or
+      // dashboard page in this same browser picks up the latest values
+      // without an extra round-trip. The /profile page's
+      // useSyncExternalStore listens for the event and re-reads.
+      try {
+        const localShape: Record<
+          string,
+          {
+            level?: string;
+            primaryRole?: string;
+            functions: string[];
+            isTeamLead?: boolean;
+          }
+        > = {};
+        for (const cfg of configs) {
+          localShape[cfg.name] = {
+            level: cfg.level ?? undefined,
+            primaryRole: cfg.primaryRole ?? undefined,
+            functions: cfg.functions ?? [],
+            isTeamLead: !!cfg.isTeamLead,
+          };
+        }
+        localStorage.setItem(
+          "metric-planitar-person-config",
+          JSON.stringify(localShape)
+        );
+        window.dispatchEvent(
+          new Event("metric-planitar-person-config-updated")
+        );
+      } catch {
+        // best-effort cache update
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error cargando usuarios");
     } finally {
@@ -158,8 +191,32 @@ export default function UsersAdminPage() {
       ) : null}
 
       {error ? (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
+        <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="flex-1">
+            <p className="font-semibold">{error}</p>
+            <p className="mt-0.5 text-xs text-red-600/80">
+              {error === "Failed to fetch"
+                ? "El backend tarda en despertar (cold start del free tier). Reintenta en unos segundos."
+                : null}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              className="rounded border border-red-300 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+            >
+              Reintentar
+            </button>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-red-700 hover:text-red-900"
+              aria-label="Cerrar"
+            >
+              ×
+            </button>
+          </div>
         </div>
       ) : null}
 

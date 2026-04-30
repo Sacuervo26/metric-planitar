@@ -13,6 +13,7 @@ import {
 import { useAppLanguage } from "@/lib/i18n/app-language";
 import { useAuth } from "@/lib/auth/use-auth";
 import { updateProfileRequest } from "@/lib/auth/auth-client";
+import { adminListPersonConfig } from "@/lib/api/admin-client";
 import {
   getCountryMetaFromTeam,
   normalizeTeam,
@@ -180,6 +181,45 @@ export default function ProfilePage() {
   const t = (en: string, es: string) => (isSpanish ? es : en);
 
   const [editing, setEditing] = useState(false);
+
+  // Refresh the personConfig localStorage cache from the cloud whenever the
+  // profile page mounts. The admin /users page writes person-config to
+  // /person-config on the backend; without this fetch, the profile owner
+  // would keep seeing whatever stale config their browser had cached.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const cloud = await adminListPersonConfig();
+        if (cancelled || !Array.isArray(cloud)) return;
+        const merged: Record<string, PersonConfigEntry> = {};
+        for (const row of cloud) {
+          merged[row.name] = {
+            level: (row.level as PersonConfigEntry["level"]) ?? undefined,
+            primaryRole:
+              (row.primaryRole as PersonConfigEntry["primaryRole"]) ??
+              undefined,
+            functions: (row.functions ?? []).filter(
+              (fn): fn is PersonFunction =>
+                ["Draft", "QA", "Siteplans", "Updates", "Revit"].includes(
+                  fn
+                )
+            ),
+            isTeamLead: !!row.isTeamLead,
+          };
+        }
+        try {
+          localStorage.setItem(PERSON_CONFIG_KEY, JSON.stringify(merged));
+          window.dispatchEvent(new Event(PERSON_CONFIG_EVENT));
+        } catch {}
+      } catch {
+        // best-effort; we still render whatever localStorage already has
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const myConfig = useMemo<PersonConfigEntry | null>(() => {
     if (!authUser?.displayName) return null;
