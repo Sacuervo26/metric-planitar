@@ -132,6 +132,29 @@ export async function fetchMe(): Promise<AuthUser | null> {
   return data.user;
 }
 
+export async function updateProfileRequest(payload: {
+  bio?: string | null;
+  photoDataUrl?: string | null;
+}): Promise<AuthUser> {
+  if (!API_BASE) {
+    throw new Error("NEXT_PUBLIC_API_URL no está configurado");
+  }
+  const res = await fetch(`${API_BASE}/auth/me/profile`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      typeof data?.error === "string"
+        ? data.error
+        : "No se pudo actualizar el perfil.";
+    throw new Error(msg);
+  }
+  return (data as { user: AuthUser }).user;
+}
+
 export async function changePasswordRequest(
   newPassword: string,
   currentPassword?: string

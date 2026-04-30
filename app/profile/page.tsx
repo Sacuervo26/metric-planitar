@@ -2,40 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useDeferredValue, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { useAppLanguage } from "@/lib/i18n/app-language";
 import { useAuth } from "@/lib/auth/use-auth";
-import type { TeamMemberSnapshotRow } from "@/lib/store/dashboard-snapshot";
-import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
+import { updateProfileRequest } from "@/lib/auth/auth-client";
 import {
-  getCountryCodeFromTeam,
   getCountryMetaFromTeam,
-  isRrePodTeam,
   normalizeTeam,
 } from "@/lib/profile/country-theme";
-
-type DirectoryPerson = {
-  name: string;
-  team: string;
-  countryCode: string;
-  countryName: string;
-};
-
-const MY_PROFILE: DirectoryPerson = {
-  name: "Sebastian Cuervo",
-  team: "RRECO3",
-  countryCode: "CO",
-  countryName: "Colombia",
-};
-
-function normalizeName(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
 
 function getAvatarInitials(name: string) {
   return name
@@ -46,432 +20,442 @@ function getAvatarInitials(name: string) {
     .join("");
 }
 
-function ChevronDownIcon({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
-      <path d="m5 7 5 6 5-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
+const MAX_PHOTO_OUTPUT_BYTES = 500 * 1024; // 500KB on the wire
 
-function buildDirectory(rows: TeamMemberSnapshotRow[] | undefined) {
-  const unique = new Map<string, DirectoryPerson>();
+/**
+ * Resize a user-selected image to a square avatar (max 512px) and
+ * re-encode as JPEG to keep the data URL small. Big phone-camera
+ * uploads (5+ MB) collapse to ~50–150 KB without visible loss in
+ * the avatar circle.
+ */
+async function fileToAvatarDataUrl(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const SIZE = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = SIZE;
+  canvas.height = SIZE;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("No se pudo procesar la imagen.");
 
-  for (const row of rows ?? []) {
-    const team = normalizeTeam(row.team);
-    if (!isRrePodTeam(team)) continue;
-    const name = String(row.name ?? "").trim();
-    if (!name) continue;
-    const countryMeta = getCountryMetaFromTeam(team);
-    const key = normalizeName(name);
+  // Center-crop the smaller dimension into a square.
+  const minSide = Math.min(bitmap.width, bitmap.height);
+  const sx = (bitmap.width - minSide) / 2;
+  const sy = (bitmap.height - minSide) / 2;
+  ctx.drawImage(bitmap, sx, sy, minSide, minSide, 0, 0, SIZE, SIZE);
+  bitmap.close?.();
 
-    if (!unique.has(key)) {
-      unique.set(key, {
-        name,
-        team,
-        countryCode: getCountryCodeFromTeam(team),
-        countryName: countryMeta.name,
-      });
-    }
+  // Walk down quality until under our max byte budget.
+  let q = 0.85;
+  let dataUrl = canvas.toDataURL("image/jpeg", q);
+  while (dataUrl.length > MAX_PHOTO_OUTPUT_BYTES && q > 0.4) {
+    q -= 0.1;
+    dataUrl = canvas.toDataURL("image/jpeg", q);
   }
-
-  if (!unique.has(normalizeName(MY_PROFILE.name))) {
-    unique.set(normalizeName(MY_PROFILE.name), MY_PROFILE);
-  }
-
-  return Array.from(unique.values()).sort(
-    (a, b) =>
-      a.countryName.localeCompare(b.countryName) ||
-      a.team.localeCompare(b.team) ||
-      a.name.localeCompare(b.name)
-  );
+  return dataUrl;
 }
 
 export default function ProfilePage() {
   const { language } = useAppLanguage();
-  const snapshot = useDashboardSnapshot();
   const router = useRouter();
-  const { user: authUser } = useAuth();
+  const { user: authUser, setUser } = useAuth();
   const isSpanish = language === "es";
   const t = (en: string, es: string) => (isSpanish ? es : en);
-  const [selectedCountry, setSelectedCountry] = useState("all");
-  const [selectedTeam, setSelectedTeam] = useState("all");
-  const [query, setQuery] = useState("");
-  const [message, setMessage] = useState("");
-  const deferredQuery = useDeferredValue(query);
 
-  const people = useMemo(
-    () => buildDirectory(snapshot?.teamMembersByPreset?.combined),
-    [snapshot?.teamMembersByPreset]
-  );
-
-  const countryOptions = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const person of people) {
-      map.set(person.countryCode, person.countryName);
-    }
-    return Array.from(map.entries())
-      .map(([value, label]) => ({ value, label }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [people]);
-
-  const teamOptions = useMemo(() => {
-    const teams = new Set<string>();
-    for (const person of people) {
-      if (selectedCountry !== "all" && person.countryCode !== selectedCountry) continue;
-      teams.add(person.team);
-    }
-    return Array.from(teams).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  }, [people, selectedCountry]);
-
-  const resolvedSelectedTeam =
-    selectedTeam !== "all" && !teamOptions.includes(selectedTeam) ? "all" : selectedTeam;
-
-  const filteredPeople = useMemo(() => {
-    const token = normalizeName(deferredQuery);
-    return people.filter((person) => {
-      if (selectedCountry !== "all" && person.countryCode !== selectedCountry) return false;
-      if (resolvedSelectedTeam !== "all" && person.team !== resolvedSelectedTeam) return false;
-      if (token && !normalizeName(person.name).includes(token)) return false;
-      return true;
-    });
-  }, [deferredQuery, people, resolvedSelectedTeam, selectedCountry]);
-
-  const primaryCandidate = useMemo(() => {
-    const token = normalizeName(query);
-    if (!token) return filteredPeople[0] ?? null;
-    return (
-      filteredPeople.find((person) => normalizeName(person.name) === token) ??
-      filteredPeople[0] ??
-      null
-    );
-  }, [filteredPeople, query]);
-
-  const selectedCountryLabel =
-    countryOptions.find((option) => option.value === selectedCountry)?.label ?? t("All countries", "Todos los países");
-  const selectedTeamLabel = resolvedSelectedTeam === "all" ? t("All pods", "Todos los pods") : resolvedSelectedTeam;
-
-  function onSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!primaryCandidate) {
-      setMessage(t("We could not find any people for that filter.", "No encontramos personas con ese filtro."));
-      return;
-    }
-    setMessage("");
-    router.push(`/profile/${encodeURIComponent(primaryCandidate.name)}`);
+  if (!authUser) {
+    // AppShell handles the redirect to /login; render nothing in the meantime.
+    return null;
   }
 
-  // The logged-in user's own profile card. Shown at the top of the page so
-  // a quick click on "Profile" in the sidebar lands them on themselves
-  // first, with the directory below for browsing other people.
-  const myProfileTeam = authUser?.team
-    ? normalizeTeam(authUser.team)
-    : null;
+  const myProfileTeam = authUser.team ? normalizeTeam(authUser.team) : null;
   const myCountryMeta = myProfileTeam
     ? getCountryMetaFromTeam(myProfileTeam)
     : null;
-  const myProfileHref = authUser?.displayName
-    ? `/profile/${encodeURIComponent(authUser.displayName)}`
-    : null;
+  const myMetricsHref = `/profile/${encodeURIComponent(authUser.displayName)}`;
+
+  const [editing, setEditing] = useState(false);
 
   return (
-    <div className="space-y-7">
-      {authUser ? (
-        <section className="overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-sm">
-          <div
-            className="h-20"
-            style={
-              myCountryMeta
-                ? { backgroundImage: myCountryMeta.heroBackgroundImage }
-                : {
-                    backgroundImage:
-                      "linear-gradient(125deg,#1e3a8a 0%,#2563eb 60%,#0ea5e9 100%)",
-                  }
-            }
-          />
-          <div className="px-7 pb-6 pt-3 sm:px-8">
-            <div className="flex flex-wrap items-end justify-between gap-5">
-              <div className="flex items-center gap-5">
-                <div className="-mt-12 grid h-24 w-24 place-items-center rounded-3xl border-4 border-white bg-slate-950 text-3xl font-bold text-white shadow-xl">
-                  {getAvatarInitials(authUser.displayName)}
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                    {t("Your profile", "Tu perfil")}
-                  </p>
-                  <h1 className="mt-1 font-[var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-slate-950">
-                    {authUser.displayName}
-                  </h1>
-                  <p className="mt-1 text-sm text-slate-500">{authUser.email}</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {authUser.role === "leader" ? (
-                      <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-700">
-                        {t("Leader", "Líder")}
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">
-                        {t("Member", "Miembro")}
-                      </span>
-                    )}
-                    {authUser.team ? (
-                      <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                        Pod {authUser.team}
-                      </span>
-                    ) : null}
-                    {myCountryMeta ? (
-                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                        {myCountryMeta.name}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
+    <div className="space-y-6">
+      <ProfileHeroCard
+        user={authUser}
+        countryGradient={myCountryMeta?.heroBackgroundImage}
+        countryName={myCountryMeta?.name}
+        metricsHref={myMetricsHref}
+        onEdit={() => setEditing(true)}
+        t={t}
+      />
 
-              {myProfileHref ? (
-                <Link
-                  href={myProfileHref}
-                  className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-lg transition hover:bg-slate-800"
-                >
-                  {t("Open my profile", "Abrir mi perfil")}
-                  <svg
-                    viewBox="0 0 20 20"
-                    fill="none"
-                    className="h-4 w-4"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M7 4l6 6-6 6"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </Link>
-              ) : null}
-            </div>
-          </div>
-        </section>
-      ) : null}
+      <ProfileBioCard bio={authUser.bio} t={t} />
 
-      <section className="relative overflow-hidden rounded-[32px] border border-slate-200 shadow-sm">
-        <div className="absolute inset-0 bg-[linear-gradient(125deg,#f6d74f_0%,#fff6cb_18%,#c8d7d0_36%,#7aa7f8_62%,#c084b6_82%,#e66567_100%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.52),transparent_34%)]" />
-        <div className="relative rounded-[32px] bg-white/86 px-7 py-7 backdrop-blur-sm sm:px-8">
-          <div className="flex flex-wrap items-start justify-between gap-6">
-            <div className="max-w-3xl">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{t("Profile Directory", "Directorio de perfiles")}</p>
-              <h1 className="mt-3 font-[var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
-                {t("Find people by country and pod", "Encuentra personas por país y pod")}
-              </h1>
-              <p className="mt-3 text-sm leading-relaxed text-slate-600 sm:text-base">
-                {t(
-                  "Filter by country first, then by pod, and then type a name if you want to narrow the search. The list is built automatically from the current snapshot, without maintaining a separate database.",
-                  "Filtra primero por país, después por pod, y luego escribe un nombre si quieres afinar la búsqueda. El listado se arma automáticamente desde el snapshot actual, sin necesidad de mantener una base de datos aparte."
-                )}
-              </p>
-            </div>
-
-            <div className="grid min-w-[240px] gap-3 rounded-3xl border border-white/70 bg-white/78 p-4 text-sm shadow-lg shadow-slate-900/5">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">{t("Coverage", "Cobertura")}</p>
-                <p className="mt-1 text-2xl font-semibold text-slate-900">{people.length}</p>
-                <p className="text-slate-500">{t("available people", "personas disponibles")}</p>
-              </div>
-              <div className="grid grid-cols-2 gap-3 text-xs text-slate-500">
-                <div className="rounded-2xl bg-slate-50 px-3 py-2">
-                  <p className="font-semibold text-slate-900">{countryOptions.length}</p>
-                  <p>{t("Countries", "Países")}</p>
-                </div>
-                <div className="rounded-2xl bg-slate-50 px-3 py-2">
-                  <p className="font-semibold text-slate-900">{teamOptions.length}</p>
-                  <p>{t("Visible pods", "Pods visibles")}</p>
-                </div>
-              </div>
-            </div>
+      {/* Quick way to find someone else without leaving the page. The
+          header search bar above also indexes people, so a small inline
+          link is enough — no need to repeat the full directory. */}
+      <section className="rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+              {t("Find someone else", "Buscar a alguien más")}
+            </p>
+            <p className="mt-1 text-sm text-slate-600">
+              {t(
+                "Use the search bar at the top of the page (people, teams or files) to open another profile.",
+                "Usa la barra de búsqueda de arriba (personas, equipos o archivos) para abrir otro perfil."
+              )}
+            </p>
           </div>
         </div>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[360px_1fr]">
-        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Filters</p>
-              <h2 className="mt-2 font-[var(--font-space-grotesk)] text-2xl font-semibold text-slate-900">
-                Find profile
-              </h2>
+      {editing ? (
+        <ProfileEditModal
+          initialBio={authUser.bio ?? ""}
+          initialPhoto={authUser.photoDataUrl ?? null}
+          onClose={() => setEditing(false)}
+          onSaved={(updated) => {
+            setUser(updated);
+            setEditing(false);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ProfileHeroCard({
+  user,
+  countryGradient,
+  countryName,
+  metricsHref,
+  onEdit,
+  t,
+}: {
+  user: NonNullable<ReturnType<typeof useAuth>["user"]>;
+  countryGradient: string | undefined;
+  countryName: string | undefined;
+  metricsHref: string;
+  onEdit: () => void;
+  t: (en: string, es: string) => string;
+}) {
+  return (
+    <section className="overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-sm">
+      <div
+        className="h-32"
+        style={{
+          backgroundImage:
+            countryGradient ??
+            "linear-gradient(125deg,#1e3a8a 0%,#2563eb 60%,#0ea5e9 100%)",
+        }}
+      />
+      <div className="px-7 pb-6 sm:px-10">
+        <div className="flex flex-wrap items-end justify-between gap-5">
+          <div className="flex items-end gap-5">
+            {user.photoDataUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={user.photoDataUrl}
+                alt={user.displayName}
+                className="-mt-14 h-28 w-28 rounded-full border-4 border-white object-cover shadow-xl"
+              />
+            ) : (
+              <div className="-mt-14 grid h-28 w-28 place-items-center rounded-full border-4 border-white bg-slate-950 text-3xl font-bold text-white shadow-xl">
+                {getAvatarInitials(user.displayName)}
+              </div>
+            )}
+            <div className="pb-1">
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                {t("Your profile", "Tu perfil")}
+              </p>
+              <h1 className="mt-1 font-[var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-slate-950">
+                {user.displayName}
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">{user.email}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {user.role === "leader" ? (
+                  <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-700">
+                    {t("Leader", "Líder")}
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                    {t("Member", "Miembro")}
+                  </span>
+                )}
+                {user.team ? (
+                  <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                    Pod {user.team}
+                  </span>
+                ) : null}
+                {countryName ? (
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                    {countryName}
+                  </span>
+                ) : null}
+              </div>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setSelectedCountry("all");
-                setSelectedTeam("all");
-                setQuery("");
-                setMessage("");
-              }}
-              className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
+              onClick={onEdit}
+              className="inline-flex items-center gap-2 rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
             >
-              Clear
+              <svg
+                viewBox="0 0 20 20"
+                fill="none"
+                className="h-4 w-4"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3 14.5V17h2.5l9-9-2.5-2.5-9 9zM13 4l3 3"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              {t("Edit profile", "Editar perfil")}
             </button>
+            <Link
+              href={metricsHref}
+              className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:bg-slate-800"
+            >
+              {t("View my metrics", "Ver mis métricas")}
+              <svg
+                viewBox="0 0 20 20"
+                fill="none"
+                className="h-4 w-4"
+                aria-hidden="true"
+              >
+                <path
+                  d="M7 4l6 6-6 6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </Link>
           </div>
+        </div>
+      </div>
+    </section>
+  );
+}
 
-          <form onSubmit={onSearch} className="mt-5 space-y-4">
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Country
-              </label>
-              <div className="relative mt-2">
-                <select
-                  value={selectedCountry}
-                  onChange={(event) => setSelectedCountry(event.target.value)}
-                  className="w-full appearance-none rounded-2xl border border-slate-300 bg-white px-4 py-3 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500"
-                >
-                  <option value="all">All countries</option>
-                  {countryOptions.map((option) => (
-                    <option key={`country-${option.value}`} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
-                  <ChevronDownIcon />
-                </span>
+function ProfileBioCard({
+  bio,
+  t,
+}: {
+  bio: string | null;
+  t: (en: string, es: string) => string;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white px-7 py-6 shadow-sm sm:px-10">
+      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+        {t("About", "Sobre mí")}
+      </p>
+      {bio && bio.trim().length > 0 ? (
+        <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+          {bio}
+        </p>
+      ) : (
+        <p className="mt-3 text-sm italic text-slate-400">
+          {t(
+            "No description yet. Click 'Edit profile' to add one.",
+            "Aún no has agregado una descripción. Haz click en 'Editar perfil' para escribir una."
+          )}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ProfileEditModal({
+  initialBio,
+  initialPhoto,
+  onClose,
+  onSaved,
+}: {
+  initialBio: string;
+  initialPhoto: string | null;
+  onClose: () => void;
+  onSaved: (
+    updated: NonNullable<ReturnType<typeof useAuth>["user"]>
+  ) => void;
+}) {
+  const { language } = useAppLanguage();
+  const t = (en: string, es: string) => (language === "es" ? es : en);
+
+  const [bio, setBio] = useState(initialBio);
+  const [photo, setPhoto] = useState<string | null>(initialPhoto);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Disable page scroll while modal is open.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  async function onPhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setPhotoBusy(true);
+    setError(null);
+    try {
+      const dataUrl = await fileToAvatarDataUrl(file);
+      setPhoto(dataUrl);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "No se pudo procesar la imagen."
+      );
+    } finally {
+      setPhotoBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const updated = await updateProfileRequest({
+        bio: bio.trim() || null,
+        photoDataUrl: photo ?? null,
+      });
+      onSaved(updated);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Error al guardar el perfil."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4 py-6">
+      <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <header className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+          <h2 className="text-base font-semibold text-slate-900">
+            {t("Edit your profile", "Edita tu perfil")}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600"
+            aria-label="Cerrar"
+          >
+            ×
+          </button>
+        </header>
+
+        <form onSubmit={onSubmit} className="space-y-5 p-5">
+          {/* Photo */}
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+              {t("Profile photo", "Foto de perfil")}
+            </label>
+            <div className="mt-2 flex items-center gap-4">
+              {photo ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={photo}
+                  alt="preview"
+                  className="h-20 w-20 rounded-full border border-slate-200 object-cover"
+                />
+              ) : (
+                <div className="grid h-20 w-20 place-items-center rounded-full border border-slate-200 bg-slate-100 text-xs text-slate-500">
+                  {t("No photo", "Sin foto")}
+                </div>
+              )}
+              <div className="flex flex-col gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={onPhotoChange}
+                  className="block text-xs text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-slate-700"
+                />
+                {photo ? (
+                  <button
+                    type="button"
+                    onClick={() => setPhoto(null)}
+                    className="self-start rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                  >
+                    {t("Remove photo", "Quitar foto")}
+                  </button>
+                ) : null}
+                {photoBusy ? (
+                  <p className="text-xs text-slate-500">
+                    {t("Processing image…", "Procesando imagen…")}
+                  </p>
+                ) : null}
               </div>
             </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Pod
-              </label>
-              <div className="relative mt-2">
-                <select
-                  value={resolvedSelectedTeam}
-                  onChange={(event) => setSelectedTeam(event.target.value)}
-                  className="w-full appearance-none rounded-2xl border border-slate-300 bg-white px-4 py-3 pr-10 text-sm text-slate-700 outline-none transition hover:border-slate-400 focus:border-blue-500"
-                >
-                  <option value="all">All pods</option>
-                  {teamOptions.map((team) => (
-                    <option key={`team-${team}`} value={team}>
-                      {team}
-                    </option>
-                  ))}
-                </select>
-                <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-slate-400">
-                  <ChevronDownIcon />
-                </span>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Person name
-              </label>
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Type part of the name..."
-                className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-blue-500"
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-            >
-              Open profile
-            </button>
-          </form>
-
-          {message ? <p className="mt-3 text-sm text-rose-600">{message}</p> : null}
-
-          <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Current scope</p>
-            <div className="mt-3 flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-white px-3 py-1.5 font-semibold text-slate-700 ring-1 ring-slate-200">
-                {selectedCountryLabel}
-              </span>
-              <span className="rounded-full bg-white px-3 py-1.5 font-semibold text-slate-700 ring-1 ring-slate-200">
-                {selectedTeamLabel}
-              </span>
-              <span className="rounded-full bg-white px-3 py-1.5 font-semibold text-slate-700 ring-1 ring-slate-200">
-                {filteredPeople.length} results
-              </span>
-            </div>
-          </div>
-        </article>
-
-        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">People List</p>
-              <h2 className="mt-2 font-[var(--font-space-grotesk)] text-2xl font-semibold text-slate-900">
-                Available people
-              </h2>
-            </div>
-            <div className="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-600">
-              {filteredPeople.length} visible
-            </div>
+            <p className="mt-2 text-[11px] text-slate-500">
+              {t(
+                "The image is resized to 512×512 and stored as JPEG to keep things fast.",
+                "La imagen se ajusta a 512×512 y se guarda como JPEG para que cargue rápido."
+              )}
+            </p>
           </div>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-2">
-            {filteredPeople.map((person) => {
-              const countryTheme = getCountryMetaFromTeam(person.team);
-              return (
-                <button
-                  key={`${person.team}-${person.name}`}
-                  type="button"
-                  onClick={() => router.push(`/profile/${encodeURIComponent(person.name)}`)}
-                  className="group overflow-hidden rounded-[28px] border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
-                >
-                  <div
-                    className="h-16 border-b border-white/40"
-                    style={{ backgroundImage: countryTheme.heroBackgroundImage }}
-                  />
-                  <div className="px-5 pb-5">
-                    <div className="-mt-7 flex items-start gap-4">
-                      <div className="grid h-14 w-14 place-items-center rounded-2xl border-4 border-white bg-slate-950 text-lg font-semibold text-white shadow-lg">
-                        {getAvatarInitials(person.name)}
-                      </div>
-                      <div className="min-w-0 pt-7">
-                        <p className="truncate text-lg font-semibold text-slate-900 transition group-hover:text-blue-700">
-                          {person.name}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-500">{person.countryName}</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap gap-2 text-xs">
-                      <span className="rounded-full bg-blue-50 px-3 py-1.5 font-semibold text-blue-700">
-                        Pod {person.team}
-                      </span>
-                      <span className="rounded-full bg-slate-100 px-3 py-1.5 font-semibold text-slate-700">
-                        Country {person.countryName}
-                      </span>
-                    </div>
-
-                    <div className="mt-4 flex items-center justify-between text-sm">
-                      <span className="text-slate-500">Open individual view</span>
-                      <span className="rounded-full bg-slate-950 px-3 py-1.5 text-xs font-semibold text-white transition group-hover:bg-blue-600">
-                        View profile
-                      </span>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
+          {/* Bio */}
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+              {t("About me", "Sobre mí")}
+            </label>
+            <textarea
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              maxLength={1500}
+              rows={6}
+              placeholder={t(
+                "Write a short description that the team will see on your profile…",
+                "Escribe una descripción corta que el equipo verá en tu perfil…"
+              )}
+              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            />
+            <p className="mt-1 text-right text-[11px] text-slate-500">
+              {bio.length} / 1500
+            </p>
           </div>
 
-          {filteredPeople.length === 0 ? (
-            <div className="mt-5 rounded-3xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center">
-              <p className="text-sm font-medium text-slate-700">No people were found for that filter.</p>
-              <p className="mt-2 text-sm text-slate-500">
-                Change the country, change the pod, or type fewer characters to widen the list.
-              </p>
+          {error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {error}
             </div>
           ) : null}
-        </article>
-      </section>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              {t("Cancel", "Cancelar")}
+            </button>
+            <button
+              type="submit"
+              disabled={submitting || photoBusy}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-blue-700 disabled:bg-blue-400"
+            >
+              {submitting
+                ? t("Saving…", "Guardando…")
+                : t("Save changes", "Guardar cambios")}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

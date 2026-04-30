@@ -57,6 +57,60 @@ router.get("/me", requireAuth, async (req, res, next) => {
   }
 });
 
+// Profile editing: any authenticated user can update their OWN bio
+// and avatar. Leader-managed editing of another user's profile lives
+// under /admin/users/:id (separate concern).
+const MAX_BIO_LENGTH = 1500;
+const MAX_PHOTO_DATA_URL_LENGTH = 800_000; // ~600KB worth of base64
+
+router.patch("/me/profile", requireAuth, async (req, res, next) => {
+  try {
+    const { bio, photoDataUrl } = req.body || {};
+    const patch = {};
+
+    if (typeof bio === "string") {
+      if (bio.length > MAX_BIO_LENGTH) {
+        return res.status(400).json({
+          error: `La descripción excede ${MAX_BIO_LENGTH} caracteres.`,
+        });
+      }
+      patch.bio = bio.trim() || null;
+    } else if (bio === null) {
+      patch.bio = null;
+    }
+
+    if (typeof photoDataUrl === "string") {
+      if (photoDataUrl.length > MAX_PHOTO_DATA_URL_LENGTH) {
+        return res.status(400).json({
+          error:
+            "La foto es demasiado grande. Sube una imagen más pequeña (máx ~500 KB).",
+        });
+      }
+      // Quick sanity check: must look like a data URL.
+      if (
+        photoDataUrl.length > 0 &&
+        !/^data:image\/(png|jpeg|jpg|webp|gif);base64,/.test(photoDataUrl)
+      ) {
+        return res.status(400).json({
+          error: "La imagen debe estar codificada como data URL base64.",
+        });
+      }
+      patch.photoDataUrl = photoDataUrl || null;
+    } else if (photoDataUrl === null) {
+      patch.photoDataUrl = null;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return res.json({ user: req.user.toPublicJSON(), changed: false });
+    }
+
+    await req.user.update(patch);
+    return res.json({ user: req.user.toPublicJSON(), changed: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/change-password", requireAuth, async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body || {};
