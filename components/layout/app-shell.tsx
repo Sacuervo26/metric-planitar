@@ -924,8 +924,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
       <main className="min-w-0">
         <header className="sticky top-0 z-40 px-4 pt-3 sm:px-6">
-          <div className="relative mx-auto max-w-[1500px] overflow-visible rounded-2xl border border-amber-200/70 bg-[linear-gradient(96deg,rgba(252,209,22,0.96)_0%,rgba(255,244,188,0.95)_22%,rgba(0,56,147,0.78)_62%,rgba(206,17,38,0.76)_100%)] shadow-[0_20px_50px_-34px_rgba(15,23,42,0.42)] backdrop-blur-xl">
-            <div className="h-1.5 rounded-t-2xl bg-[linear-gradient(90deg,#FCD116_0%,#FCD116_50%,#003893_50%,#003893_75%,#CE1126_75%,#CE1126_100%)]" />
+          <div className="relative mx-auto max-w-[1500px] overflow-hidden rounded-2xl border border-amber-200/70 bg-[linear-gradient(96deg,rgba(252,209,22,0.96)_0%,rgba(255,244,188,0.95)_22%,rgba(0,56,147,0.78)_62%,rgba(206,17,38,0.76)_100%)] shadow-[0_20px_50px_-34px_rgba(15,23,42,0.42)] backdrop-blur-xl">
             <div
               aria-hidden="true"
               className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(circle_at_12%_20%,rgba(255,255,255,0.42),transparent_26%),radial-gradient(circle_at_64%_18%,rgba(255,255,255,0.18),transparent_20%),linear-gradient(180deg,rgba(255,255,255,0.12),rgba(255,255,255,0.02))]"

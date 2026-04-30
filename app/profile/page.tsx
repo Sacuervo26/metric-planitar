@@ -18,6 +18,16 @@ import {
   getCountryMetaFromTeam,
   normalizeTeam,
 } from "@/lib/profile/country-theme";
+import {
+  readAdjustmentsForPerson,
+  saveAdjustmentEntries,
+  MANUAL_DAY_ADJUSTMENTS_EVENT,
+  getAdjustmentEntries,
+  getAdjustmentTotalHours,
+  type ManualDayAdjustment,
+  type ManualDayAdjustmentEntry,
+} from "@/lib/store/manual-day-adjustments";
+import { writeEditorIdentity } from "@/lib/store/editor-identity";
 
 /* ─────────────────────────────────────────────────────────────────────
  *  Person config (level / primaryRole / functions) — read-only here.
@@ -262,7 +272,7 @@ export default function ProfilePage() {
   const headline = headlineParts.join(" · ");
 
   return (
-    <div>
+    <div className="space-y-6">
       <ProfileFullCard
         user={authUser}
         countryGradient={myCountryMeta?.heroBackgroundImage}
@@ -273,6 +283,17 @@ export default function ProfilePage() {
         onEdit={() => setEditing(true)}
         t={t}
       />
+
+      {/* Self-service Adicionales calendar — anyone can log their own
+          additional hours per day and the entries flow into the
+          existing manual-day-adjustments backend. */}
+      {authUser.normalizedPersonName ? (
+        <SelfAdjustmentsCard
+          normalizedPersonName={authUser.normalizedPersonName}
+          editorIdentity={authUser.displayName}
+          t={t}
+        />
+      ) : null}
 
       {editing ? (
         <ProfileEditModal
@@ -328,7 +349,7 @@ function ProfileFullCard({
 
   return (
     <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
-      {/* Cover */}
+      {/* Cover — neutral gradient by default; user can upload their own. */}
       <div
         className="relative h-44 sm:h-56"
         style={
@@ -340,8 +361,7 @@ function ProfileFullCard({
               }
             : {
                 backgroundImage:
-                  countryGradient ??
-                  "linear-gradient(125deg,#1e3a8a 0%,#2563eb 60%,#0ea5e9 100%)",
+                  "linear-gradient(135deg,#1e3a8a 0%,#1e293b 40%,#0f172a 100%)",
               }
         }
       >
@@ -807,5 +827,464 @@ function ProfileEditModal({
         </form>
       </div>
     </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  Self-service Adicionales card (week calendar + per-day editor)
+ *
+ *  Lets the profile owner log their own additional hours and notes per
+ *  day. Saves through saveAdjustmentEntries which already handles cloud
+ *  sync + IndexedDB cache + the MANUAL_DAY_ADJUSTMENTS_EVENT, so what
+ *  the user enters here shows up in the team-wide Week History view.
+ * ───────────────────────────────────────────────────────────────────── */
+
+function getMondayIso(d: Date): string {
+  const copy = new Date(d);
+  copy.setHours(0, 0, 0, 0);
+  const day = copy.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  copy.setDate(copy.getDate() + diff);
+  return copy.toISOString().slice(0, 10);
+}
+
+function isoToDate(iso: string): Date {
+  const [y, m, d] = iso.split("-").map((s) => Number(s));
+  return new Date(y, (m ?? 1) - 1, d ?? 1);
+}
+
+function isoAddDays(iso: string, days: number): string {
+  const d = isoToDate(iso);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatDayHeader(iso: string, locale: string): {
+  weekday: string;
+  date: string;
+} {
+  const d = isoToDate(iso);
+  const weekday = d
+    .toLocaleDateString(locale, { weekday: "short" })
+    .replace(".", "")
+    .toUpperCase();
+  const date = d.toLocaleDateString(locale, {
+    day: "2-digit",
+    month: "short",
+  });
+  return { weekday, date };
+}
+
+type DayDraft = {
+  isoDate: string;
+  entries: Array<{ id: string; hours: string; note: string }>;
+  saving: boolean;
+  feedback: "" | "saved" | "error";
+};
+
+function adjustmentToDayDraft(
+  iso: string,
+  adj: ManualDayAdjustment | undefined
+): DayDraft {
+  const entries = adj ? getAdjustmentEntries(adj) : [];
+  if (entries.length === 0) {
+    return {
+      isoDate: iso,
+      entries: [{ id: cryptoUuid(), hours: "", note: "" }],
+      saving: false,
+      feedback: "",
+    };
+  }
+  return {
+    isoDate: iso,
+    entries: entries.map((e) => ({
+      id: e.id,
+      hours: e.hours > 0 ? String(e.hours) : "",
+      note: e.note,
+    })),
+    saving: false,
+    feedback: "",
+  };
+}
+
+function cryptoUuid(): string {
+  if (typeof window !== "undefined" && window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  return `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function SelfAdjustmentsCard({
+  normalizedPersonName,
+  editorIdentity,
+  t,
+}: {
+  normalizedPersonName: string;
+  editorIdentity: string;
+  t: (en: string, es: string) => string;
+}) {
+  const { language, locale } = useAppLanguage();
+  const [weekStart, setWeekStart] = useState<string>(() =>
+    getMondayIso(new Date())
+  );
+  const [adjByDate, setAdjByDate] = useState<
+    Record<string, ManualDayAdjustment>
+  >({});
+  const [drafts, setDrafts] = useState<Record<string, DayDraft>>({});
+  const [loading, setLoading] = useState(false);
+
+  // Mirror the user's display name into the legacy editor-identity store
+  // so saveAdjustmentEntries records the right "updatedBy" tag.
+  useEffect(() => {
+    writeEditorIdentity(editorIdentity);
+  }, [editorIdentity]);
+
+  // Load this person's adjustments and refresh on global event.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const list = await readAdjustmentsForPerson(normalizedPersonName);
+        if (cancelled) return;
+        const map: Record<string, ManualDayAdjustment> = {};
+        for (const adj of list) map[adj.isoDate] = adj;
+        setAdjByDate(map);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    const onUpdated = () => {
+      void load();
+    };
+    window.addEventListener(MANUAL_DAY_ADJUSTMENTS_EVENT, onUpdated);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(MANUAL_DAY_ADJUSTMENTS_EVENT, onUpdated);
+    };
+  }, [normalizedPersonName]);
+
+  const weekDays = useMemo(() => {
+    return Array.from({ length: 7 }, (_, i) => isoAddDays(weekStart, i));
+  }, [weekStart]);
+
+  // Sync local drafts from the freshly loaded adjustments whenever week
+  // or remote data changes — but never overwrite a draft the user is
+  // actively editing for that same day.
+  useEffect(() => {
+    setDrafts((prev) => {
+      const next: Record<string, DayDraft> = { ...prev };
+      for (const iso of weekDays) {
+        if (!prev[iso]) {
+          next[iso] = adjustmentToDayDraft(iso, adjByDate[iso]);
+        }
+      }
+      return next;
+    });
+  }, [weekDays, adjByDate]);
+
+  function updateEntry(
+    iso: string,
+    entryId: string,
+    patch: { hours?: string; note?: string }
+  ) {
+    setDrafts((prev) => {
+      const day = prev[iso];
+      if (!day) return prev;
+      return {
+        ...prev,
+        [iso]: {
+          ...day,
+          feedback: "",
+          entries: day.entries.map((e) =>
+            e.id === entryId ? { ...e, ...patch } : e
+          ),
+        },
+      };
+    });
+  }
+
+  function addEntry(iso: string) {
+    setDrafts((prev) => {
+      const day = prev[iso];
+      if (!day) return prev;
+      return {
+        ...prev,
+        [iso]: {
+          ...day,
+          feedback: "",
+          entries: [
+            ...day.entries,
+            { id: cryptoUuid(), hours: "", note: "" },
+          ],
+        },
+      };
+    });
+  }
+
+  function removeEntry(iso: string, entryId: string) {
+    setDrafts((prev) => {
+      const day = prev[iso];
+      if (!day) return prev;
+      const remaining = day.entries.filter((e) => e.id !== entryId);
+      return {
+        ...prev,
+        [iso]: {
+          ...day,
+          feedback: "",
+          entries:
+            remaining.length === 0
+              ? [{ id: cryptoUuid(), hours: "", note: "" }]
+              : remaining,
+        },
+      };
+    });
+  }
+
+  async function saveDay(iso: string) {
+    const day = drafts[iso];
+    if (!day) return;
+    setDrafts((prev) => ({
+      ...prev,
+      [iso]: { ...day, saving: true, feedback: "" },
+    }));
+    try {
+      const entries: ManualDayAdjustmentEntry[] = day.entries
+        .map((e) => ({
+          id: e.id,
+          hours: Math.max(0, Number(e.hours) || 0),
+          note: e.note.trim(),
+        }))
+        .filter((e) => e.hours > 0 || e.note.length > 0);
+
+      await saveAdjustmentEntries(normalizedPersonName, iso, entries);
+      setDrafts((prev) => ({
+        ...prev,
+        [iso]: {
+          ...day,
+          saving: false,
+          feedback: "saved",
+          // Reset to "fresh" form if user cleared everything; otherwise
+          // keep their current edits visible.
+          entries:
+            entries.length === 0
+              ? [{ id: cryptoUuid(), hours: "", note: "" }]
+              : day.entries,
+        },
+      }));
+      setTimeout(() => {
+        setDrafts((prev) =>
+          prev[iso]?.feedback === "saved"
+            ? { ...prev, [iso]: { ...prev[iso], feedback: "" } }
+            : prev
+        );
+      }, 2000);
+    } catch {
+      setDrafts((prev) => ({
+        ...prev,
+        [iso]: { ...day, saving: false, feedback: "error" },
+      }));
+    }
+  }
+
+  function shiftWeek(deltaWeeks: number) {
+    setWeekStart((prev) => isoAddDays(prev, deltaWeeks * 7));
+  }
+
+  function goToCurrentWeek() {
+    setWeekStart(getMondayIso(new Date()));
+  }
+
+  const weekLabel = useMemo(() => {
+    const start = isoToDate(weekStart);
+    const end = isoToDate(isoAddDays(weekStart, 6));
+    const fmtShort = (d: Date) =>
+      d.toLocaleDateString(locale, { day: "2-digit", month: "short" });
+    return `${fmtShort(start)} – ${fmtShort(end)}`;
+  }, [weekStart, locale]);
+
+  const weekTotal = useMemo(() => {
+    return weekDays.reduce((sum, iso) => {
+      const adj = adjByDate[iso];
+      return sum + getAdjustmentTotalHours(adj);
+    }, 0);
+  }, [weekDays, adjByDate]);
+
+  const isCurrentWeek = weekStart === getMondayIso(new Date());
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4 sm:px-8">
+        <div>
+          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+            {t("My Adicionales", "Mis adicionales")}
+          </p>
+          <h2 className="mt-1 font-[var(--font-space-grotesk)] text-xl font-semibold text-slate-900">
+            {t(
+              "Log your additional hours per day",
+              "Registra tus horas adicionales por día"
+            )}
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            {t(
+              "These hours and notes sync with the team Week History.",
+              "Estas horas y notas se sincronizan con el Week History del equipo."
+            )}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => shiftWeek(-1)}
+            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-sm text-slate-700 hover:bg-slate-50"
+            aria-label={t("Previous week", "Semana anterior")}
+          >
+            ‹
+          </button>
+          <span className="rounded-lg bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+            {weekLabel}
+          </span>
+          <button
+            type="button"
+            onClick={() => shiftWeek(1)}
+            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-sm text-slate-700 hover:bg-slate-50"
+            aria-label={t("Next week", "Semana siguiente")}
+          >
+            ›
+          </button>
+          {!isCurrentWeek ? (
+            <button
+              type="button"
+              onClick={goToCurrentWeek}
+              className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              {t("This week", "Esta semana")}
+            </button>
+          ) : null}
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+            {t("Week total", "Total semana")}: {weekTotal.toFixed(2)}h
+          </span>
+        </div>
+      </header>
+
+      <div className="grid gap-3 p-4 sm:p-6 md:grid-cols-2 xl:grid-cols-3">
+        {weekDays.map((iso) => {
+          const draft = drafts[iso];
+          const adj = adjByDate[iso];
+          const dayTotal = getAdjustmentTotalHours(adj);
+          const { weekday, date } = formatDayHeader(iso, locale);
+          if (!draft) return null;
+          return (
+            <article
+              key={iso}
+              className={`rounded-xl border ${
+                dayTotal > 0
+                  ? "border-amber-200 bg-amber-50/40"
+                  : "border-slate-200 bg-white"
+              } p-3`}
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    {weekday}
+                  </p>
+                  <p className="text-sm font-semibold text-slate-900">
+                    {date}
+                  </p>
+                </div>
+                <p className="text-sm font-semibold text-amber-700">
+                  {dayTotal > 0 ? `+${dayTotal.toFixed(2)}h` : "—"}
+                </p>
+              </div>
+
+              <div className="mt-2 space-y-1.5">
+                {draft.entries.map((entry, idx) => (
+                  <div
+                    key={entry.id}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1.5"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-semibold text-slate-400">
+                        #{idx + 1}
+                      </span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.25}
+                        inputMode="decimal"
+                        value={entry.hours}
+                        onChange={(e) =>
+                          updateEntry(iso, entry.id, {
+                            hours: e.target.value,
+                          })
+                        }
+                        placeholder="h"
+                        className="w-14 rounded border border-slate-300 px-1.5 py-1 text-xs text-right"
+                      />
+                      <span className="text-[10px] text-slate-500">h</span>
+                      <button
+                        type="button"
+                        onClick={() => removeEntry(iso, entry.id)}
+                        className="ml-auto text-slate-400 hover:text-red-600"
+                        aria-label={t("Remove entry", "Eliminar entrada")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={entry.note}
+                      onChange={(e) =>
+                        updateEntry(iso, entry.id, { note: e.target.value })
+                      }
+                      placeholder={t("Note", "Nota")}
+                      maxLength={200}
+                      className="mt-1 w-full rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => addEntry(iso)}
+                  className="text-[11px] font-semibold text-blue-700 hover:underline"
+                >
+                  + {t("Add entry", "Agregar")}
+                </button>
+                <div className="flex items-center gap-2">
+                  {draft.feedback === "saved" ? (
+                    <span className="text-[11px] font-semibold text-emerald-700">
+                      ✓ {t("Saved", "Guardado")}
+                    </span>
+                  ) : draft.feedback === "error" ? (
+                    <span className="text-[11px] font-semibold text-red-600">
+                      {t("Save failed", "Error al guardar")}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => saveDay(iso)}
+                    disabled={draft.saving}
+                    className="rounded bg-slate-900 px-3 py-1 text-[11px] font-semibold text-white hover:bg-slate-700 disabled:bg-slate-400"
+                  >
+                    {draft.saving
+                      ? t("Saving…", "Guardando…")
+                      : t("Save", "Guardar")}
+                  </button>
+                </div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+      {loading ? (
+        <p className="px-6 py-3 text-xs text-slate-500">
+          {t("Loading week…", "Cargando semana…")}
+        </p>
+      ) : null}
+    </section>
   );
 }
