@@ -61,6 +61,7 @@ import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
 import { InfoTooltip } from "@/components/shared/info-tooltip";
 import { getCountryMetaFromTeam } from "@/lib/profile/country-theme";
 import { useAuth } from "@/lib/auth/use-auth";
+import { ProfileTabsNav } from "@/app/profile/page";
 
 type Level = "Junior" | "Intermedio" | "Senior";
 type PrimaryRole = "Drafter" | "QA" | "Updates";
@@ -2105,8 +2106,21 @@ export default function PersonProfilePage() {
     }
   }, [profileAlertWeekOptions, selectedAlertWeekKey]);
 
+  // Show the Profile / Metrics tab nav only when the user is looking at
+  // their OWN /profile/[name]. The "Profile" tab points to /profile
+  // (their own bio + photo), which doesn't make sense when reviewing
+  // someone else's metrics — leaders can use the search bar for that.
+  const showProfileTabs = !!authUser && isOwnProfile;
+
   return (
     <div className="space-y-7">
+      {showProfileTabs ? (
+        <ProfileTabsNav
+          active="metrics"
+          metricsHref={`/profile/${encodeURIComponent(personName)}`}
+          t={(en, es) => (isSpanish ? es : en)}
+        />
+      ) : null}
       <section className="relative overflow-hidden rounded-[32px] border border-slate-200 shadow-sm">
         <div className="absolute inset-0" style={{ backgroundImage: countryMeta.heroBackgroundImage }} />
         <div className="absolute inset-0 bg-[linear-gradient(140deg,rgba(15,23,42,0.12)_0%,rgba(15,23,42,0.24)_100%)]" />

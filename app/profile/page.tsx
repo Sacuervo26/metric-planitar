@@ -273,6 +273,8 @@ export default function ProfilePage() {
 
   return (
     <div className="space-y-6">
+      <ProfileTabsNav active="profile" metricsHref={myMetricsHref} t={t} />
+
       <ProfileFullCard
         user={authUser}
         countryGradient={myCountryMeta?.heroBackgroundImage}
@@ -308,6 +310,47 @@ export default function ProfilePage() {
         />
       ) : null}
     </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  Tab navigation between the public profile and the metrics view.
+ *  Shown on both /profile and /profile/[name] for the same person, so
+ *  the user can flip back and forth without losing where they are.
+ * ───────────────────────────────────────────────────────────────────── */
+
+export function ProfileTabsNav({
+  active,
+  metricsHref,
+  t,
+}: {
+  active: "profile" | "metrics";
+  metricsHref: string;
+  t: (en: string, es: string) => string;
+}) {
+  return (
+    <nav className="flex w-fit items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
+      <Link
+        href="/profile"
+        className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition ${
+          active === "profile"
+            ? "bg-slate-900 text-white shadow"
+            : "text-slate-600 hover:text-slate-900"
+        }`}
+      >
+        {t("Profile", "Perfil")}
+      </Link>
+      <Link
+        href={metricsHref}
+        className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition ${
+          active === "metrics"
+            ? "bg-slate-900 text-white shadow"
+            : "text-slate-600 hover:text-slate-900"
+        }`}
+      >
+        {t("Metrics", "Métricas")}
+      </Link>
+    </nav>
   );
 }
 

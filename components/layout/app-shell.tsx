@@ -553,6 +553,21 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     [collapsed]
   );
 
+  // Members only need to see their own pod's shift leader. Leaders see all
+  // three so they can jump between teams. If the user has no team yet
+  // (rare — usually only the four leaders), fall back to showing all.
+  const visibleShiftLeaders = useMemo(() => {
+    if (!authUser) return SHIFT_LEADERS;
+    if (authUser.role === "leader") return SHIFT_LEADERS;
+    if (authUser.team) {
+      const mine = SHIFT_LEADERS.filter(
+        (s) => s.team.toUpperCase() === authUser.team!.toUpperCase()
+      );
+      return mine.length > 0 ? mine : SHIFT_LEADERS;
+    }
+    return SHIFT_LEADERS;
+  }, [authUser]);
+
   const shouldIndexFiles =
     !pathname.startsWith("/upload") && (focusSearch || query.trim().length > 0);
 
@@ -840,7 +855,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                 {language === "es" ? "Lideres de turno" : "Shift Leaders"}
               </p>
               <div className="mt-2 space-y-1.5">
-                {SHIFT_LEADERS.map((leader) => {
+                {visibleShiftLeaders.map((leader) => {
                   const href = `/teams?team=${leader.team}`;
                   return (
                     <Link
@@ -868,7 +883,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             </>
           ) : (
             <div className="flex flex-col items-center gap-1">
-              {SHIFT_LEADERS.map((leader) => (
+              {visibleShiftLeaders.map((leader) => (
                 <Link
                   key={leader.team}
                   href={`/teams?team=${leader.team}`}
