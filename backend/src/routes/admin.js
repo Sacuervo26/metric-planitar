@@ -12,6 +12,8 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { sequelize, User } = require("../models");
+const { requireApiKey } = require("../middleware/auth");
+const { requireLeader } = require("../middleware/jwtAuth");
 
 const router = express.Router();
 
@@ -139,7 +141,7 @@ function generateTempPassword() {
  * passwords. Re-running it after everyone exists returns an empty
  * `created` list.
  */
-router.post("/bootstrap-users", async (_req, res, next) => {
+router.post("/bootstrap-users", requireApiKey, async (_req, res, next) => {
   try {
     // 1) Ensure the table exists (no-op if migrations already created it).
     await User.sync();
@@ -201,5 +203,199 @@ router.post("/bootstrap-users", async (_req, res, next) => {
     next(err);
   }
 });
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  /admin/users — leader-only user management
+ *  Protected by requireLeader (JWT), so only authenticated leaders can
+ *  list, create, edit, delete or reset passwords for other accounts.
+ * ───────────────────────────────────────────────────────────────────── */
+
+const VALID_ROLES = ["leader", "member"];
+
+function userToPublic(user) {
+  return user.toPublicJSON();
+}
+
+router.get("/users", requireLeader, async (_req, res, next) => {
+  try {
+    const users = await User.findAll({
+      order: [
+        ["role", "ASC"],
+        ["team", "ASC"],
+        ["displayName", "ASC"],
+      ],
+    });
+    return res.json({ users: users.map(userToPublic) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/users", requireLeader, async (req, res, next) => {
+  try {
+    const {
+      email,
+      displayName,
+      normalizedPersonName,
+      team,
+      role,
+    } = req.body || {};
+
+    if (typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({ error: "Email inválido" });
+    }
+    if (typeof displayName !== "string" || !displayName.trim()) {
+      return res.status(400).json({ error: "displayName es requerido" });
+    }
+    if (!VALID_ROLES.includes(role)) {
+      return res
+        .status(400)
+        .json({ error: `role debe ser uno de: ${VALID_ROLES.join(", ")}` });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const existing = await User.findOne({ where: { email: cleanEmail } });
+    if (existing) {
+      return res
+        .status(409)
+        .json({ error: "Ya existe una cuenta con ese correo." });
+    }
+
+    const tempPassword = generateTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, BCRYPT_ROUNDS);
+
+    const created = await User.create({
+      email: cleanEmail,
+      displayName: displayName.trim(),
+      normalizedPersonName:
+        typeof normalizedPersonName === "string" && normalizedPersonName.trim()
+          ? normalizedPersonName.trim().toLowerCase()
+          : normalizeName(displayName),
+      team: team || null,
+      role,
+      passwordHash,
+      mustChangePassword: true,
+    });
+
+    return res.status(201).json({
+      user: userToPublic(created),
+      tempPassword,
+      note:
+        "Pásale esta contraseña a la persona. No se puede recuperar después; si la pierde, hay que resetearla.",
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/users/:id", requireLeader, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "id inválido" });
+    }
+    const target = await User.findByPk(id);
+    if (!target) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    const { displayName, normalizedPersonName, team, role } = req.body || {};
+    const patch = {};
+
+    if (typeof displayName === "string" && displayName.trim()) {
+      patch.displayName = displayName.trim();
+    }
+    if (typeof normalizedPersonName === "string") {
+      patch.normalizedPersonName = normalizedPersonName.trim().toLowerCase();
+    }
+    if (team === null || typeof team === "string") {
+      patch.team = team || null;
+    }
+    if (typeof role === "string") {
+      if (!VALID_ROLES.includes(role)) {
+        return res
+          .status(400)
+          .json({ error: `role debe ser uno de: ${VALID_ROLES.join(", ")}` });
+      }
+      // Don't let a leader demote themselves and lock everyone out.
+      if (
+        role === "member" &&
+        target.id === req.user.id &&
+        target.role === "leader"
+      ) {
+        return res.status(400).json({
+          error:
+            "No puedes degradarte a ti mismo. Pídele a otro líder que lo haga.",
+        });
+      }
+      patch.role = role;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return res.json({ user: userToPublic(target), changed: false });
+    }
+
+    await target.update(patch);
+    return res.json({ user: userToPublic(target), changed: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/users/:id", requireLeader, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "id inválido" });
+    }
+    const target = await User.findByPk(id);
+    if (!target) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+    if (target.id === req.user.id) {
+      return res
+        .status(400)
+        .json({ error: "No puedes eliminar tu propia cuenta." });
+    }
+    await target.destroy();
+    return res.json({ ok: true, id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post(
+  "/users/:id/reset-password",
+  requireLeader,
+  async (req, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) {
+        return res.status(400).json({ error: "id inválido" });
+      }
+      const target = await User.findByPk(id);
+      if (!target) {
+        return res.status(404).json({ error: "Usuario no encontrado" });
+      }
+
+      const tempPassword = generateTempPassword();
+      const passwordHash = await bcrypt.hash(tempPassword, BCRYPT_ROUNDS);
+      await target.update({
+        passwordHash,
+        mustChangePassword: true,
+      });
+
+      return res.json({
+        ok: true,
+        user: userToPublic(target),
+        tempPassword,
+        note:
+          "Pásale esta contraseña a la persona AHORA. No se puede recuperar después.",
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 module.exports = router;

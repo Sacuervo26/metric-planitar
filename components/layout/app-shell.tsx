@@ -43,6 +43,12 @@ const SHIFT_LEADERS: Array<{ team: string; name: string }> = [
   { team: "RRECO2", name: "Maria Vasquez" },
   { team: "RRECO3", name: "Sebastian Cuervo" },
 ];
+type NavItemDef = NavItem & {
+  // Restrict an item to a specific role. Items without `role` are visible
+  // to everyone (signed-in users).
+  role?: "leader" | "member";
+};
+
 const MAIN_SECTIONS = [
   {
     href: "/",
@@ -62,7 +68,14 @@ const MAIN_SECTIONS = [
     icon: ProfileIcon,
     match: (pathname: string) => pathname.startsWith("/profile"),
   },
-] as const satisfies ReadonlyArray<NavItem>;
+  {
+    href: "/users",
+    label: "Users",
+    icon: UsersIcon,
+    match: (pathname: string) => pathname.startsWith("/users"),
+    role: "leader" as const,
+  },
+] as const satisfies ReadonlyArray<NavItemDef>;
 
 type SearchItemType = "person" | "team" | "file";
 type SearchHit = {
@@ -97,6 +110,19 @@ function ProfileIcon(className = "h-4 w-4") {
   );
 }
 
+function UsersIcon(className = "h-4 w-4") {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM17 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 21a7 7 0 0 1 14 0M14 21a5 5 0 0 1 8-4"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function UploadIcon(className = "h-4 w-4") {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
@@ -123,9 +149,12 @@ function CollapseIcon({
   );
 }
 
-const navItems: NavItem[] = [
-  ...MAIN_SECTIONS,
-];
+const ALL_NAV_ITEMS: ReadonlyArray<NavItemDef> = MAIN_SECTIONS;
+
+function filterNavForRole(role: "leader" | "member" | undefined) {
+  if (!role) return [] as NavItemDef[];
+  return ALL_NAV_ITEMS.filter((item) => !item.role || item.role === role);
+}
 
 function normalizeToken(value: string) {
   return value
@@ -231,6 +260,19 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       pathname !== "/change-password"
     ) {
       router.replace("/change-password");
+    }
+  }, [authStatus, authUser, pathname, router]);
+
+  // Block members from leader-only routes (defense in depth — the sidebar
+  // already hides the links, but a direct URL still needs to bounce).
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !authUser) return;
+    if (authUser.role === "member") {
+      const blocked =
+        pathname.startsWith("/upload") || pathname.startsWith("/users");
+      if (blocked) {
+        router.replace("/");
+      }
     }
   }, [authStatus, authUser, pathname, router]);
 
@@ -597,7 +639,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="mt-7 space-y-2">
-          {navItems.map((item) => (
+          {filterNavForRole(authUser?.role).map((item) => (
             <SidebarItem
               key={item.href}
               item={item}
@@ -720,47 +762,49 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           )}
         </div>
 
-        <div
-          className={`mt-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 transition-all duration-300 ${
-            collapsed ? "px-2 py-3" : ""
-          }`}
-          title={collapsed ? "Data Center / Admin Upload" : undefined}
-        >
-          {!collapsed ? (
-            <>
-              <p className="text-xs uppercase tracking-wider text-blue-500">Data Center</p>
-              <p className="mt-2 text-sm font-semibold text-slate-900">Admin Upload</p>
-              <p className="mt-1 text-xs text-slate-600">
-                {language === "es"
-                  ? "Carga Standard y Australia para actualizar analytics."
-                  : "Upload Standard and Australia files to refresh analytics."}
-              </p>
+        {authUser?.role === "leader" ? (
+          <div
+            className={`mt-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 transition-all duration-300 ${
+              collapsed ? "px-2 py-3" : ""
+            }`}
+            title={collapsed ? "Data Center / Admin Upload" : undefined}
+          >
+            {!collapsed ? (
+              <>
+                <p className="text-xs uppercase tracking-wider text-blue-500">Data Center</p>
+                <p className="mt-2 text-sm font-semibold text-slate-900">Admin Upload</p>
+                <p className="mt-1 text-xs text-slate-600">
+                  {language === "es"
+                    ? "Carga Standard y Australia para actualizar analytics."
+                    : "Upload Standard and Australia files to refresh analytics."}
+                </p>
+                <Link
+                  href="/upload"
+                  className={`mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                    pathname.startsWith("/upload")
+                      ? "bg-blue-600 text-white"
+                      : "bg-slate-900 text-white hover:bg-slate-800"
+                  }`}
+                >
+                  {UploadIcon("h-3.5 w-3.5")}
+                  {language === "es" ? "Abrir Upload" : "Open Upload"}
+                </Link>
+              </>
+            ) : (
               <Link
                 href="/upload"
-                className={`mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                  pathname.startsWith("/upload")
-                    ? "bg-blue-600 text-white"
-                    : "bg-slate-900 text-white hover:bg-slate-800"
+                className={`group relative flex justify-center rounded-lg px-2 py-2 text-slate-700 transition hover:bg-white ${
+                  pathname.startsWith("/upload") ? "bg-white text-blue-700" : ""
                 }`}
               >
-                {UploadIcon("h-3.5 w-3.5")}
-                {language === "es" ? "Abrir Upload" : "Open Upload"}
+                {UploadIcon()}
+                <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 hidden -translate-y-1/2 rounded-lg bg-slate-900 px-2 py-1 text-xs font-semibold text-white shadow-lg group-hover:block">
+                  Data Center
+                </span>
               </Link>
-            </>
-          ) : (
-            <Link
-              href="/upload"
-              className={`group relative flex justify-center rounded-lg px-2 py-2 text-slate-700 transition hover:bg-white ${
-                pathname.startsWith("/upload") ? "bg-white text-blue-700" : ""
-              }`}
-            >
-              {UploadIcon()}
-              <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 hidden -translate-y-1/2 rounded-lg bg-slate-900 px-2 py-1 text-xs font-semibold text-white shadow-lg group-hover:block">
-                Data Center
-              </span>
-            </Link>
-          )}
-        </div>
+            )}
+          </div>
+        ) : null}
       </aside>
 
       <main className="min-w-0">
@@ -856,21 +900,23 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     ES
                   </button>
                 </div>
-                <Link
-                  href="/upload"
-                  className={`inline-flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-xs font-semibold transition ${
-                    pathname.startsWith("/upload")
-                      ? "border-blue-700 bg-blue-700 text-white shadow-sm"
-                      : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
-                  }`}
-                >
-                  {UploadIcon("h-3.5 w-3.5")}
-                  Data Center
-                </Link>
+                {authUser?.role === "leader" ? (
+                  <Link
+                    href="/upload"
+                    className={`inline-flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-xs font-semibold transition ${
+                      pathname.startsWith("/upload")
+                        ? "border-blue-700 bg-blue-700 text-white shadow-sm"
+                        : "border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50"
+                    }`}
+                  >
+                    {UploadIcon("h-3.5 w-3.5")}
+                    Data Center
+                  </Link>
+                ) : null}
               </div>
 
               <nav className="flex flex-wrap items-center gap-2 lg:hidden">
-                {navItems.map((item) => {
+                {filterNavForRole(authUser?.role).map((item) => {
                   const active = item.match(pathname);
                   return (
                     <Link
@@ -886,16 +932,18 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     </Link>
                   );
                 })}
-                <Link
-                  href="/upload"
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                    pathname.startsWith("/upload")
-                      ? "bg-blue-100 text-blue-700"
-                      : "bg-slate-100 text-slate-700"
-                  }`}
-                >
-                  Data Center
-                </Link>
+                {authUser?.role === "leader" ? (
+                  <Link
+                    href="/upload"
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                      pathname.startsWith("/upload")
+                        ? "bg-blue-100 text-blue-700"
+                        : "bg-slate-100 text-slate-700"
+                    }`}
+                  >
+                    Data Center
+                  </Link>
+                ) : null}
                 <div className="inline-flex rounded-lg border border-slate-200 bg-white/80 p-1">
                   <button
                     type="button"

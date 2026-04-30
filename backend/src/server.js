@@ -66,7 +66,11 @@ app.use("/snapshots", cloudStateLimiter, requireApiKey, snapshotsRouter);
 app.use("/adjustments", cloudStateLimiter, requireApiKey, adjustmentsRouter);
 app.use("/schedule", cloudStateLimiter, requireApiKey, scheduleRouter);
 app.use("/person-config", cloudStateLimiter, requireApiKey, personConfigRouter);
-app.use("/admin", cloudStateLimiter, requireApiKey, adminRouter);
+// /admin has mixed auth: bootstrap uses the legacy API_KEY (no JWT exists
+// yet at first install), while user CRUD uses requireLeader (JWT) so
+// only signed-in leaders can manage accounts. Each handler in admin.js
+// declares its own middleware.
+app.use("/admin", cloudStateLimiter, adminRouter);
 
 app.use((err, _req, res, _next) => {
   console.error(err);

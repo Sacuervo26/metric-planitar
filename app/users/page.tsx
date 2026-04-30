@@ -1,0 +1,683 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/lib/auth/use-auth";
+import {
+  adminCreateUser,
+  adminDeleteUser,
+  adminListUsers,
+  adminResetUserPassword,
+  adminUpdateUser,
+  type CreateUserPayload,
+} from "@/lib/api/admin-client";
+import type { AuthUser } from "@/lib/auth/auth-client";
+
+const TEAMS = ["RRECO1", "RRECO2", "RRECO3"] as const;
+
+function normalizeName(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+export default function UsersAdminPage() {
+  const router = useRouter();
+  const { user: me, status } = useAuth();
+
+  const [users, setUsers] = useState<AuthUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [filterTeam, setFilterTeam] = useState<string>("ALL");
+  const [filterRole, setFilterRole] = useState<string>("ALL");
+  const [filterText, setFilterText] = useState<string>("");
+
+  // Toast/banner with the latest temp password (shown once, then dismissable).
+  const [tempBanner, setTempBanner] = useState<{
+    email: string;
+    tempPassword: string;
+  } | null>(null);
+
+  // Block non-leaders.
+  useEffect(() => {
+    if (status === "anonymous") {
+      router.replace("/login?next=/users");
+    } else if (status === "authenticated" && me?.role !== "leader") {
+      router.replace("/");
+    }
+  }, [status, me, router]);
+
+  async function refresh() {
+    setLoading(true);
+    setError(null);
+    try {
+      const list = await adminListUsers();
+      setUsers(list);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error cargando usuarios");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (status === "authenticated" && me?.role === "leader") {
+      void refresh();
+    }
+  }, [status, me]);
+
+  const filtered = useMemo(() => {
+    const q = filterText.trim().toLowerCase();
+    return users.filter((u) => {
+      if (filterTeam !== "ALL") {
+        const team = u.team ?? "-";
+        if (filterTeam === "-") {
+          if (u.team) return false;
+        } else {
+          if (team !== filterTeam) return false;
+        }
+      }
+      if (filterRole !== "ALL" && u.role !== filterRole) return false;
+      if (q) {
+        const haystack = `${u.email} ${u.displayName} ${u.team ?? ""}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [users, filterTeam, filterRole, filterText]);
+
+  if (status !== "authenticated" || me?.role !== "leader") {
+    return null;
+  }
+
+  return (
+    <div className="px-6 py-8 lg:px-10 lg:py-10 max-w-6xl">
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+            Administración
+          </p>
+          <h1 className="mt-1 text-3xl font-bold text-slate-900">
+            Usuarios
+          </h1>
+          <p className="mt-2 max-w-xl text-sm text-slate-500">
+            Gestiona quién entra a la app, su rol y a qué pod pertenece.
+            Solo los líderes pueden ver esta página.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowCreate(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-blue-700"
+        >
+          + Agregar usuario
+        </button>
+      </header>
+
+      {tempBanner ? (
+        <div className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                Contraseña temporal generada
+              </p>
+              <p className="mt-1 text-sm text-amber-900">
+                <span className="font-semibold">{tempBanner.email}</span>{" "}
+                — pásale esta contraseña <em>ahora</em>. Solo se muestra una vez.
+              </p>
+              <code className="mt-2 inline-block rounded bg-white px-3 py-1 font-mono text-base font-bold text-slate-900 shadow-sm">
+                {tempBanner.tempPassword}
+              </code>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard
+                    .writeText(tempBanner.tempPassword)
+                    .catch(() => {});
+                }}
+                className="ml-2 text-xs font-medium text-blue-700 hover:underline"
+              >
+                Copiar
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setTempBanner(null)}
+              className="text-amber-700 hover:text-amber-900"
+              aria-label="Cerrar"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </div>
+      ) : null}
+
+      {/* Filters */}
+      <div className="mb-4 flex flex-wrap gap-2">
+        <input
+          type="search"
+          placeholder="Buscar por nombre o correo…"
+          value={filterText}
+          onChange={(e) => setFilterText(e.target.value)}
+          className="flex-1 min-w-[220px] rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+        />
+        <select
+          value={filterTeam}
+          onChange={(e) => setFilterTeam(e.target.value)}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+        >
+          <option value="ALL">Todos los pods</option>
+          {TEAMS.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+          <option value="-">Sin pod</option>
+        </select>
+        <select
+          value={filterRole}
+          onChange={(e) => setFilterRole(e.target.value)}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+        >
+          <option value="ALL">Todos los roles</option>
+          <option value="leader">Líderes</option>
+          <option value="member">Miembros</option>
+        </select>
+      </div>
+
+      <p className="mb-2 text-xs text-slate-500">
+        {filtered.length} de {users.length} usuarios
+      </p>
+
+      {/* Table */}
+      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-4 py-3 text-left">Usuario</th>
+              <th className="px-4 py-3 text-left">Correo</th>
+              <th className="px-4 py-3 text-left">Pod</th>
+              <th className="px-4 py-3 text-left">Rol</th>
+              <th className="px-4 py-3 text-left">Último login</th>
+              <th className="px-4 py-3 text-right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                  Cargando…
+                </td>
+              </tr>
+            ) : filtered.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                  No hay usuarios que coincidan con los filtros.
+                </td>
+              </tr>
+            ) : (
+              filtered.map((u) => (
+                <UserRow
+                  key={u.id}
+                  user={u}
+                  isMe={u.id === me?.id}
+                  isEditing={editingId === u.id}
+                  onStartEdit={() => setEditingId(u.id)}
+                  onCancelEdit={() => setEditingId(null)}
+                  onUpdated={async () => {
+                    setEditingId(null);
+                    await refresh();
+                  }}
+                  onDeleted={async () => {
+                    await refresh();
+                  }}
+                  onResetPassword={(email, pwd) =>
+                    setTempBanner({ email, tempPassword: pwd })
+                  }
+                />
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {showCreate ? (
+        <CreateUserModal
+          onClose={() => setShowCreate(false)}
+          onCreated={async (email, pwd) => {
+            setShowCreate(false);
+            setTempBanner({ email, tempPassword: pwd });
+            await refresh();
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function UserRow({
+  user,
+  isMe,
+  isEditing,
+  onStartEdit,
+  onCancelEdit,
+  onUpdated,
+  onDeleted,
+  onResetPassword,
+}: {
+  user: AuthUser;
+  isMe: boolean;
+  isEditing: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onUpdated: () => void | Promise<void>;
+  onDeleted: () => void | Promise<void>;
+  onResetPassword: (email: string, pwd: string) => void;
+}) {
+  const [displayName, setDisplayName] = useState(user.displayName);
+  const [team, setTeam] = useState<string>(user.team ?? "-");
+  const [role, setRole] = useState<"leader" | "member">(user.role);
+  const [working, setWorking] = useState<string | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isEditing) {
+      setDisplayName(user.displayName);
+      setTeam(user.team ?? "-");
+      setRole(user.role);
+      setRowError(null);
+    }
+  }, [isEditing, user]);
+
+  async function save() {
+    setWorking("save");
+    setRowError(null);
+    try {
+      await adminUpdateUser(user.id, {
+        displayName,
+        team: team === "-" ? null : team,
+        role,
+      });
+      await onUpdated();
+    } catch (err) {
+      setRowError(err instanceof Error ? err.message : "Error al guardar");
+    } finally {
+      setWorking(null);
+    }
+  }
+
+  async function reset() {
+    if (
+      !confirm(
+        `¿Resetear la contraseña de ${user.displayName}? Te daremos una temporal nueva que tendrás que pasarle.`
+      )
+    ) {
+      return;
+    }
+    setWorking("reset");
+    setRowError(null);
+    try {
+      const data = await adminResetUserPassword(user.id);
+      onResetPassword(data.user.email, data.tempPassword);
+    } catch (err) {
+      setRowError(err instanceof Error ? err.message : "Error al resetear");
+    } finally {
+      setWorking(null);
+    }
+  }
+
+  async function remove() {
+    if (
+      !confirm(
+        `¿Eliminar permanentemente a ${user.displayName}? Esto NO se puede deshacer.`
+      )
+    ) {
+      return;
+    }
+    setWorking("delete");
+    setRowError(null);
+    try {
+      await adminDeleteUser(user.id);
+      await onDeleted();
+    } catch (err) {
+      setRowError(err instanceof Error ? err.message : "Error al eliminar");
+    } finally {
+      setWorking(null);
+    }
+  }
+
+  if (isEditing) {
+    return (
+      <tr className="bg-blue-50/40">
+        <td className="px-4 py-3" colSpan={6}>
+          <div className="flex flex-wrap gap-2 items-end">
+            <label className="flex flex-col">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Nombre
+              </span>
+              <input
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
+              />
+            </label>
+            <label className="flex flex-col">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Pod
+              </span>
+              <select
+                value={team}
+                onChange={(e) => setTeam(e.target.value)}
+                className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
+              >
+                <option value="-">Sin pod</option>
+                {TEAMS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Rol
+              </span>
+              <select
+                value={role}
+                onChange={(e) =>
+                  setRole(e.target.value as "leader" | "member")
+                }
+                className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
+                disabled={isMe && role === "leader"}
+                title={
+                  isMe && role === "leader"
+                    ? "Otro líder debe degradarte para evitar quedarse sin admins."
+                    : undefined
+                }
+              >
+                <option value="member">Miembro</option>
+                <option value="leader">Líder</option>
+              </select>
+            </label>
+            <div className="ml-auto flex gap-2">
+              <button
+                type="button"
+                onClick={save}
+                disabled={working === "save"}
+                className="rounded bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-blue-400"
+              >
+                {working === "save" ? "Guardando…" : "Guardar"}
+              </button>
+              <button
+                type="button"
+                onClick={onCancelEdit}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+          {rowError ? (
+            <p className="mt-2 text-xs text-red-600">{rowError}</p>
+          ) : null}
+        </td>
+      </tr>
+    );
+  }
+
+  const lastLogin = user.lastLoginAt
+    ? new Date(user.lastLoginAt).toLocaleDateString()
+    : "—";
+
+  return (
+    <tr className="hover:bg-slate-50">
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          <div className="grid h-8 w-8 place-items-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700">
+            {user.displayName
+              .split(" ")
+              .map((p) => p[0])
+              .filter(Boolean)
+              .slice(0, 2)
+              .join("")
+              .toUpperCase()}
+          </div>
+          <div>
+            <p className="font-medium text-slate-900">
+              {user.displayName}
+              {isMe ? (
+                <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
+                  (tú)
+                </span>
+              ) : null}
+            </p>
+            {user.mustChangePassword ? (
+              <p className="text-[10px] text-amber-700">
+                Aún no ha cambiado contraseña
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </td>
+      <td className="px-4 py-3 text-slate-600">{user.email}</td>
+      <td className="px-4 py-3">
+        {user.team ? (
+          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+            {user.team}
+          </span>
+        ) : (
+          <span className="text-slate-400">—</span>
+        )}
+      </td>
+      <td className="px-4 py-3">
+        {user.role === "leader" ? (
+          <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+            Líder
+          </span>
+        ) : (
+          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+            Miembro
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-slate-600">{lastLogin}</td>
+      <td className="px-4 py-3 text-right">
+        <div className="inline-flex gap-1.5">
+          <button
+            type="button"
+            onClick={onStartEdit}
+            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Editar
+          </button>
+          <button
+            type="button"
+            onClick={reset}
+            disabled={working === "reset"}
+            className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            {working === "reset" ? "…" : "Resetear pwd"}
+          </button>
+          {!isMe ? (
+            <button
+              type="button"
+              onClick={remove}
+              disabled={working === "delete"}
+              className="rounded border border-red-300 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+            >
+              {working === "delete" ? "…" : "Eliminar"}
+            </button>
+          ) : null}
+        </div>
+        {rowError ? (
+          <p className="mt-1 text-xs text-red-600">{rowError}</p>
+        ) : null}
+      </td>
+    </tr>
+  );
+}
+
+function CreateUserModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (email: string, tempPassword: string) => void | Promise<void>;
+}) {
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [team, setTeam] = useState<string>("-");
+  const [role, setRole] = useState<"leader" | "member">("member");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const payload: CreateUserPayload = {
+        email: email.trim(),
+        displayName: displayName.trim(),
+        normalizedPersonName: normalizeName(displayName),
+        team: team === "-" ? null : team,
+        role,
+      };
+      const result = await adminCreateUser(payload);
+      await onCreated(result.user.email, result.tempPassword);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al crear");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-xl border border-slate-200">
+        <header className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+          <h2 className="text-base font-semibold text-slate-900">
+            Agregar usuario
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600"
+            aria-label="Cerrar"
+          >
+            ×
+          </button>
+        </header>
+
+        <form onSubmit={onSubmit} className="p-5 space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">
+              Correo Planitar
+            </label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="usuario@planitar.com"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">
+              Nombre completo (igual al de las métricas)
+            </label>
+            <input
+              type="text"
+              required
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Maria Vasquez"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Pod
+              </label>
+              <select
+                value={team}
+                onChange={(e) => setTeam(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              >
+                <option value="-">Sin pod</option>
+                {TEAMS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Rol
+              </label>
+              <select
+                value={role}
+                onChange={(e) =>
+                  setRole(e.target.value as "leader" | "member")
+                }
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              >
+                <option value="member">Miembro</option>
+                <option value="leader">Líder</option>
+              </select>
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-500">
+            Se generará una contraseña temporal aleatoria que aparecerá en la
+            siguiente pantalla. Cópiala y pásasela a la persona — no se puede
+            recuperar después.
+          </p>
+
+          {error ? (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-blue-700 disabled:bg-blue-400"
+            >
+              {submitting ? "Creando…" : "Crear usuario"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
