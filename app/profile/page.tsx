@@ -315,6 +315,62 @@ export default function ProfilePage() {
  *  Hero card (cover, avatar, name, headline, action buttons)
  * ───────────────────────────────────────────────────────────────────── */
 
+function ProfileActionButtons({
+  metricsHref,
+  onEdit,
+  t,
+}: {
+  metricsHref: string;
+  onEdit: () => void;
+  t: (en: string, es: string) => string;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onEdit}
+        className="inline-flex items-center gap-2 rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+      >
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          className="h-4 w-4"
+          aria-hidden="true"
+        >
+          <path
+            d="M3 14.5V17h2.5l9-9-2.5-2.5-9 9zM13 4l3 3"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+        {t("Edit profile", "Editar perfil")}
+      </button>
+      <Link
+        href={metricsHref}
+        className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:bg-slate-800"
+      >
+        {t("View my metrics", "Ver mis métricas")}
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          className="h-4 w-4"
+          aria-hidden="true"
+        >
+          <path
+            d="M7 4l6 6-6 6"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </Link>
+    </>
+  );
+}
+
 /**
  * Single card containing every profile section so the page reads as one
  * unit (cover → identity strip → divider → about → divider → functions)
@@ -391,9 +447,11 @@ function ProfileFullCard({
 
       {/* Body */}
       <div className="px-6 pb-6 sm:px-10">
-        <div className="-mt-16 flex flex-wrap items-end justify-between gap-4 sm:-mt-20">
-          {/* Avatar + identity */}
-          <div className="flex items-end gap-5">
+        {/* Avatar overlaps the cover at the top, name + identity sit BELOW
+            the avatar so they always have room to breathe (used to get
+            crushed against a tall avatar in a side-by-side layout). */}
+        <div className="-mt-16 flex flex-col gap-4 sm:-mt-20">
+          <div className="flex items-end justify-between gap-3">
             <div className="relative">
               {user.photoDataUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -430,86 +488,53 @@ function ProfileFullCard({
               </button>
             </div>
 
-            <div className="pb-2">
-              <h1 className="font-[var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-slate-950">
-                {user.displayName}
-              </h1>
-              <p className="mt-1 text-sm font-medium text-slate-700">
-                {headline}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {[user.team ? `Pod ${user.team}` : null, countryName]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">{user.email}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {user.role === "leader" ? (
-                  <span className="rounded-full bg-amber-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
-                    {t("Leader", "Líder")}
-                  </span>
-                ) : (
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                    {t("Member", "Miembro")}
-                  </span>
-                )}
-                {user.team ? (
-                  <span className="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-semibold text-blue-700">
-                    Pod {user.team}
-                  </span>
-                ) : null}
-                {countryName ? (
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700">
-                    {countryName}
-                  </span>
-                ) : null}
-              </div>
+            {/* Action buttons sit at the cover line, on the right.
+                Their alignment is independent of the name text below. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <ProfileActionButtons
+                metricsHref={metricsHref}
+                onEdit={onEdit}
+                t={t}
+              />
             </div>
           </div>
 
-          {/* Actions */}
-          <div className="flex flex-wrap items-center gap-2 pb-2">
-            <button
-              type="button"
-              onClick={onEdit}
-              className="inline-flex items-center gap-2 rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
-            >
-              <svg
-                viewBox="0 0 20 20"
-                fill="none"
-                className="h-4 w-4"
-                aria-hidden="true"
-              >
-                <path
-                  d="M3 14.5V17h2.5l9-9-2.5-2.5-9 9zM13 4l3 3"
-                  stroke="currentColor"
-                  strokeWidth="1.7"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              {t("Edit profile", "Editar perfil")}
-            </button>
-            <Link
-              href={metricsHref}
-              className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:bg-slate-800"
-            >
-              {t("View my metrics", "Ver mis métricas")}
-              <svg
-                viewBox="0 0 20 20"
-                fill="none"
-                className="h-4 w-4"
-                aria-hidden="true"
-              >
-                <path
-                  d="M7 4l6 6-6 6"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </Link>
+          {/* Identity (name + headline + meta) BELOW the avatar so it has
+              full width and never gets occluded by the photo. */}
+          <div>
+            <h1 className="font-[var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+              {user.displayName}
+            </h1>
+            <p className="mt-1 text-sm font-medium text-slate-700">
+              {headline}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {[user.team ? `Pod ${user.team}` : null, countryName]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">{user.email}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {user.role === "leader" ? (
+                <span className="rounded-full bg-amber-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                  {t("Leader", "Líder")}
+                </span>
+              ) : (
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  {t("Member", "Miembro")}
+                </span>
+              )}
+              {user.team ? (
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-semibold text-blue-700">
+                  Pod {user.team}
+                </span>
+              ) : null}
+              {countryName ? (
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700">
+                  {countryName}
+                </span>
+              ) : null}
+            </div>
           </div>
         </div>
 
