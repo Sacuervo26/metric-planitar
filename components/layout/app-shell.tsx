@@ -435,11 +435,20 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             }
           }
 
+          // Sleep 250ms between pushes so we don't melt Render's
+          // free-tier worker (512MB RAM). Each batch has thousands of
+          // rows; back-to-back inserts spike GC and have OOM'd the
+          // instance before. With the gap, GC has room to breathe.
+          const sleep = (ms: number) =>
+            new Promise<void>((resolve) => setTimeout(resolve, ms));
+
           for (const b of missingStandard) {
             await pushOne("standard", b);
+            await sleep(250);
           }
           for (const b of missingAustralia) {
             await pushOne("australia", b);
+            await sleep(250);
           }
 
           // eslint-disable-next-line no-console
