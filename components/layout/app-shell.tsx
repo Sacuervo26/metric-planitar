@@ -351,13 +351,27 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         // where opening a new tab erased uploaded metrics.
         if (localHasBatches && !remoteHasBatches) {
           try {
+            // eslint-disable-next-line no-console
+            console.info(
+              `[metric-planitar] cloud batches empty, pushing local copy (` +
+                `${localStandardCount} std + ${localAustraliaCount} aus batches)`
+            );
             await persistRemoteDashboardState({
               snapshot: localSnapshot,
               batches: localBatches,
               updatedAt: localBatches.updatedAt || new Date().toISOString(),
             });
-          } catch {
-            // best-effort recovery; local IndexedDB still has the data
+            // eslint-disable-next-line no-console
+            console.info("[metric-planitar] cloud recovery push succeeded");
+          } catch (err) {
+            // Surface to the console so we can diagnose 413 / 500 / network
+            // errors instead of swallowing them. Local IndexedDB still has
+            // the data, so the user isn't blocked from working.
+            // eslint-disable-next-line no-console
+            console.error(
+              "[metric-planitar] cloud recovery push FAILED:",
+              err
+            );
           }
           return;
         }

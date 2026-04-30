@@ -29,7 +29,11 @@ app.use(
     allowedHeaders: ["Content-Type", "X-API-Key", "Authorization"],
   })
 );
-app.use(express.json({ limit: "50mb" }));
+// 200mb covers the cumulative-CSV payload that builds up after the team
+// uploads several weeks of metrics (each weekly Standard CSV is around
+// 4–5 MB once parsed into JSON; 17 weeks * 5 MB ≈ 85 MB). Express's default
+// is 100kb, which silently 413s without a clear message in the browser.
+app.use(express.json({ limit: "200mb" }));
 
 const cloudStateLimiter = rateLimit({
   windowMs: 60 * 1000,
