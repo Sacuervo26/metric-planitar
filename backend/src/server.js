@@ -10,6 +10,7 @@ const adjustmentsRouter = require("./routes/adjustments");
 const scheduleRouter = require("./routes/schedule");
 const personConfigRouter = require("./routes/personConfig");
 const authRouter = require("./routes/auth");
+const adminRouter = require("./routes/admin");
 const { requireApiKey } = require("./middleware/auth");
 
 const app = express();
@@ -61,6 +62,7 @@ app.use("/snapshots", cloudStateLimiter, requireApiKey, snapshotsRouter);
 app.use("/adjustments", cloudStateLimiter, requireApiKey, adjustmentsRouter);
 app.use("/schedule", cloudStateLimiter, requireApiKey, scheduleRouter);
 app.use("/person-config", cloudStateLimiter, requireApiKey, personConfigRouter);
+app.use("/admin", cloudStateLimiter, requireApiKey, adminRouter);
 
 app.use((err, _req, res, _next) => {
   console.error(err);
