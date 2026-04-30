@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useDeferredValue, useMemo, useState } from "react";
 import { useAppLanguage } from "@/lib/i18n/app-language";
+import { useAuth } from "@/lib/auth/use-auth";
 import type { TeamMemberSnapshotRow } from "@/lib/store/dashboard-snapshot";
 import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
 import {
@@ -89,6 +91,7 @@ export default function ProfilePage() {
   const { language } = useAppLanguage();
   const snapshot = useDashboardSnapshot();
   const router = useRouter();
+  const { user: authUser } = useAuth();
   const isSpanish = language === "es";
   const t = (en: string, es: string) => (isSpanish ? es : en);
   const [selectedCountry, setSelectedCountry] = useState("all");
@@ -158,8 +161,99 @@ export default function ProfilePage() {
     router.push(`/profile/${encodeURIComponent(primaryCandidate.name)}`);
   }
 
+  // The logged-in user's own profile card. Shown at the top of the page so
+  // a quick click on "Profile" in the sidebar lands them on themselves
+  // first, with the directory below for browsing other people.
+  const myProfileTeam = authUser?.team
+    ? normalizeTeam(authUser.team)
+    : null;
+  const myCountryMeta = myProfileTeam
+    ? getCountryMetaFromTeam(myProfileTeam)
+    : null;
+  const myProfileHref = authUser?.displayName
+    ? `/profile/${encodeURIComponent(authUser.displayName)}`
+    : null;
+
   return (
     <div className="space-y-7">
+      {authUser ? (
+        <section className="overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-sm">
+          <div
+            className="h-20"
+            style={
+              myCountryMeta
+                ? { backgroundImage: myCountryMeta.heroBackgroundImage }
+                : {
+                    backgroundImage:
+                      "linear-gradient(125deg,#1e3a8a 0%,#2563eb 60%,#0ea5e9 100%)",
+                  }
+            }
+          />
+          <div className="px-7 pb-6 pt-3 sm:px-8">
+            <div className="flex flex-wrap items-end justify-between gap-5">
+              <div className="flex items-center gap-5">
+                <div className="-mt-12 grid h-24 w-24 place-items-center rounded-3xl border-4 border-white bg-slate-950 text-3xl font-bold text-white shadow-xl">
+                  {getAvatarInitials(authUser.displayName)}
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                    {t("Your profile", "Tu perfil")}
+                  </p>
+                  <h1 className="mt-1 font-[var(--font-space-grotesk)] text-3xl font-semibold tracking-tight text-slate-950">
+                    {authUser.displayName}
+                  </h1>
+                  <p className="mt-1 text-sm text-slate-500">{authUser.email}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {authUser.role === "leader" ? (
+                      <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-700">
+                        {t("Leader", "Líder")}
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                        {t("Member", "Miembro")}
+                      </span>
+                    )}
+                    {authUser.team ? (
+                      <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                        Pod {authUser.team}
+                      </span>
+                    ) : null}
+                    {myCountryMeta ? (
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                        {myCountryMeta.name}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              {myProfileHref ? (
+                <Link
+                  href={myProfileHref}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-lg transition hover:bg-slate-800"
+                >
+                  {t("Open my profile", "Abrir mi perfil")}
+                  <svg
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M7 4l6 6-6 6"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </Link>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       <section className="relative overflow-hidden rounded-[32px] border border-slate-200 shadow-sm">
         <div className="absolute inset-0 bg-[linear-gradient(125deg,#f6d74f_0%,#fff6cb_18%,#c8d7d0_36%,#7aa7f8_62%,#c084b6_82%,#e66567_100%)]" />
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.52),transparent_34%)]" />
