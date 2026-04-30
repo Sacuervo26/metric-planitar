@@ -122,41 +122,11 @@ export default function UsersAdminPage() {
       </header>
 
       {tempBanner ? (
-        <div className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-                Contraseña temporal generada
-              </p>
-              <p className="mt-1 text-sm text-amber-900">
-                <span className="font-semibold">{tempBanner.email}</span>{" "}
-                — pásale esta contraseña <em>ahora</em>. Solo se muestra una vez.
-              </p>
-              <code className="mt-2 inline-block rounded bg-white px-3 py-1 font-mono text-base font-bold text-slate-900 shadow-sm">
-                {tempBanner.tempPassword}
-              </code>
-              <button
-                type="button"
-                onClick={() => {
-                  navigator.clipboard
-                    .writeText(tempBanner.tempPassword)
-                    .catch(() => {});
-                }}
-                className="ml-2 text-xs font-medium text-blue-700 hover:underline"
-              >
-                Copiar
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={() => setTempBanner(null)}
-              className="text-amber-700 hover:text-amber-900"
-              aria-label="Cerrar"
-            >
-              ×
-            </button>
-          </div>
-        </div>
+        <TempPasswordModal
+          email={tempBanner.email}
+          tempPassword={tempBanner.tempPassword}
+          onClose={() => setTempBanner(null)}
+        />
       ) : null}
 
       {error ? (
@@ -677,6 +647,88 @@ function CreateUserModal({
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function TempPasswordModal({
+  email,
+  tempPassword,
+  onClose,
+}: {
+  email: string;
+  tempPassword: string;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(tempPassword);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      // Clipboard API may be blocked in non-https or some browsers — the
+      // password is still visible on-screen, so the user can copy by hand.
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 px-4">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border-2 border-amber-300">
+        <header className="flex items-center justify-between border-b border-slate-200 bg-amber-50 px-5 py-3">
+          <h2 className="text-base font-bold text-amber-900">
+            🔑 Contraseña temporal
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600"
+            aria-label="Cerrar"
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-slate-700">
+            Pásale esta contraseña a{" "}
+            <span className="font-semibold">{email}</span>. La persona la
+            tendrá que cambiar en el primer ingreso.
+          </p>
+
+          <div className="rounded-lg border-2 border-amber-300 bg-amber-50 px-4 py-4 text-center">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700">
+              Contraseña temporal
+            </p>
+            <code className="mt-1 block break-all font-mono text-2xl font-bold text-slate-900">
+              {tempPassword}
+            </code>
+          </div>
+
+          <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+            ⚠️ Solo se muestra <strong>una vez</strong>. Si cierras este modal
+            sin copiarla, tendrás que resetearla otra vez.
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={copy}
+              className="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-blue-700"
+            >
+              {copied ? "✓ Copiada" : "Copiar contraseña"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
