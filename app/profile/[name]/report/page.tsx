@@ -3,6 +3,17 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { useAuth } from "@/lib/auth/use-auth";
 import {
   COL_DRAFTER_NAME,
@@ -725,6 +736,14 @@ export default function PersonReportPage() {
           .report-root table {
             font-size: 10px;
           }
+          /* Keep the two rate charts side-by-side on the same printed page
+             instead of breaking mid-chart. */
+          .report-root .report-charts {
+            page-break-inside: avoid;
+          }
+          .report-root .report-charts article {
+            page-break-inside: avoid;
+          }
           @page {
             size: landscape;
             margin: 10mm;
@@ -816,6 +835,90 @@ export default function PersonReportPage() {
           unit="h"
         />
       </section>
+
+      {visibleWeeks.length > 0 ? (
+        <section className="report-charts mt-6 grid gap-4 md:grid-cols-2 print:grid-cols-2">
+          <article className="rounded-xl border border-slate-200 bg-white p-4">
+            <h3 className="text-sm font-semibold text-slate-900">
+              Draft Rate semanal
+            </h3>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Evolución por semana del Draft Rate (files × 1000 / horas).
+            </p>
+            <div className="mt-3" style={{ width: "100%", height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={visibleWeeks.map((w) => ({
+                    week: w.weekLabel,
+                    draftRate: Number.isFinite(w.draftRate) ? w.draftRate : 0,
+                  }))}
+                  margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="week" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    formatter={(value) => [
+                      typeof value === "number" ? formatNumber(value, 0) : "-",
+                      "Draft Rate",
+                    ]}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="draftRate"
+                    name="Draft Rate"
+                    stroke="#2563eb"
+                    strokeWidth={2.4}
+                    dot={{ r: 3 }}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </article>
+
+          <article className="rounded-xl border border-slate-200 bg-white p-4">
+            <h3 className="text-sm font-semibold text-slate-900">
+              QA Rate semanal
+            </h3>
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Evolución por semana del QA Rate (files × 1000 / horas).
+            </p>
+            <div className="mt-3" style={{ width: "100%", height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={visibleWeeks.map((w) => ({
+                    week: w.weekLabel,
+                    qaRate: Number.isFinite(w.qaRate) ? w.qaRate : 0,
+                  }))}
+                  margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="week" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    formatter={(value) => [
+                      typeof value === "number" ? formatNumber(value, 0) : "-",
+                      "QA Rate",
+                    ]}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="qaRate"
+                    name="QA Rate"
+                    stroke="#10b981"
+                    strokeWidth={2.4}
+                    dot={{ r: 3 }}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </article>
+        </section>
+      ) : null}
 
       {eventsAggregated.length > 0 ? (
         <section className="mt-6">
