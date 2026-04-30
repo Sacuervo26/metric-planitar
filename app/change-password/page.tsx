@@ -26,6 +26,15 @@ export default function ChangePasswordPage() {
     }
   }, [status, router]);
 
+  async function tryChangePassword(): Promise<void> {
+    const updated = await changePasswordRequest(
+      newPassword,
+      isFirstLogin ? undefined : currentPassword
+    );
+    setUser(updated);
+    router.replace("/");
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -37,16 +46,35 @@ export default function ChangePasswordPage() {
 
     setSubmitting(true);
     try {
-      const updated = await changePasswordRequest(
-        newPassword,
-        isFirstLogin ? undefined : currentPassword
-      );
-      setUser(updated);
-      router.replace("/");
+      await tryChangePassword();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Error al cambiar la contraseña."
-      );
+      // Render free-tier cold starts surface as "Failed to fetch" — retry
+      // once after a short wait to give the worker time to wake up.
+      const message =
+        err instanceof Error ? err.message : "Error al cambiar la contraseña.";
+      const isNetworkBlip = /failed to fetch|networkerror/i.test(message);
+      if (isNetworkBlip) {
+        setError(
+          "El servidor está despertando, espera unos segundos y reintento automáticamente…"
+        );
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 12_000));
+          await tryChangePassword();
+          return;
+        } catch (retryErr) {
+          const retryMessage =
+            retryErr instanceof Error
+              ? retryErr.message
+              : "Error al cambiar la contraseña.";
+          setError(
+            /failed to fetch|networkerror/i.test(retryMessage)
+              ? "El servidor sigue tardando. Espera 30 segundos y vuelve a intentar."
+              : retryMessage
+          );
+          return;
+        }
+      }
+      setError(message);
     } finally {
       setSubmitting(false);
     }

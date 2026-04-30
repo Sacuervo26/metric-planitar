@@ -30,7 +30,25 @@ function LoginForm() {
     setError(null);
     setSubmitting(true);
     try {
-      const authed = await login(email.trim(), password);
+      let authed;
+      try {
+        authed = await login(email.trim(), password);
+      } catch (err) {
+        // Cold-start retry: Render free-tier wakes up slowly. If the
+        // first attempt fails with a network blip, give the worker a
+        // dozen seconds and try once more with a friendly heads-up.
+        const message =
+          err instanceof Error ? err.message : "Error al iniciar sesión";
+        if (/failed to fetch|networkerror/i.test(message)) {
+          setError(
+            "El servidor está despertando, espera unos segundos y reintento…"
+          );
+          await new Promise((resolve) => setTimeout(resolve, 12_000));
+          authed = await login(email.trim(), password);
+        } else {
+          throw err;
+        }
+      }
       if (authed.mustChangePassword) {
         router.replace("/change-password");
         return;
@@ -38,7 +56,13 @@ function LoginForm() {
       const next = params.get("next") || "/";
       router.replace(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al iniciar sesión");
+      const message =
+        err instanceof Error ? err.message : "Error al iniciar sesión";
+      setError(
+        /failed to fetch|networkerror/i.test(message)
+          ? "El servidor sigue tardando. Espera 30 segundos y vuelve a intentar."
+          : message
+      );
     } finally {
       setSubmitting(false);
     }
