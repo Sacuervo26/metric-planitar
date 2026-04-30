@@ -345,41 +345,69 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         const remoteHasBatches =
           remoteStandardCount + remoteAustraliaCount > 0;
 
-        // SAFETY NET: never wipe local data with empty remote data.
-        // If local has CSV batches but the cloud is empty (e.g. a previous
-        // sync attempt failed silently), recover by pushing local → cloud
-        // instead of pulling cloud → local. This prevents the data-loss bug
-        // where opening a new tab erased uploaded metrics.
-        if (localHasBatches && !remoteHasBatches) {
-          // Push one batch per request to keep each POST under Render's
-          // free-tier limits and to make cold-start timeouts non-fatal:
-          // a failure on batch 7/17 still leaves batches 1–6 in the cloud.
-          // The /cloud-state POST endpoint upserts batches by id without
-          // deleting the others, so partial pushes are safe.
+        // SAFETY NET: push every locally cached batch that is NOT yet
+        // present in the cloud (matched by batch id). Catches three
+        // scenarios:
+        //   1. First-time install on a device that uploaded CSVs while
+        //      offline / before the cloud sync was wired up.
+        //   2. A previous push that timed out partway through a 17-batch
+        //      catch-up — only pushes the missing ones on the next visit.
+        //   3. The "cloud empty" recovery from earlier.
+        // /cloud-state POST upserts batches by id and never deletes the
+        // ones missing from the payload, so this is safe to run on every
+        // bootstrap.
+        const remoteStdIds = new Set(
+          (remote.state.batches?.standard ?? []).map((b) => b.id)
+        );
+        const remoteAusIds = new Set(
+          (remote.state.batches?.australia ?? []).map((b) => b.id)
+        );
+        const missingStandard = (localBatches.standard ?? []).filter(
+          (b) => !remoteStdIds.has(b.id)
+        );
+        const missingAustralia = (localBatches.australia ?? []).filter(
+          (b) => !remoteAusIds.has(b.id)
+        );
+
+        const totalMissing = missingStandard.length + missingAustralia.length;
+
+        if (totalMissing > 0) {
           // eslint-disable-next-line no-console
           console.info(
-            `[metric-planitar] cloud batches empty, pushing locally cached ` +
-              `${localStandardCount} std + ${localAustraliaCount} aus batches one at a time`
+            `[metric-planitar] cloud is missing ${totalMissing} batches ` +
+              `(${missingStandard.length} std + ${missingAustralia.length} aus); ` +
+              `pushing them one at a time`
           );
 
           let pushed = 0;
           let failed = 0;
           const pushedAt = new Date().toISOString();
 
-          // First, push the snapshot alone (small) so the dashboard
-          // skeleton lights up immediately for other devices.
-          try {
-            await persistRemoteDashboardState({
-              snapshot: localSnapshot,
-              batches: { standard: [], australia: [], updatedAt: pushedAt },
-              updatedAt: pushedAt,
-            });
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(
-              "[metric-planitar] snapshot push failed (continuing with batches):",
-              err
-            );
+          // Push the snapshot alone first, but only if the cloud doesn't
+          // already have a fresher one — avoids overwriting another
+          // device's newer dashboard.
+          const remoteSnapshotAt =
+            Date.parse(remote.state.snapshot?.generatedAt ?? "") || 0;
+          const localSnapshotAt =
+            Date.parse(localSnapshot?.generatedAt ?? "") || 0;
+          if (localSnapshot && localSnapshotAt > remoteSnapshotAt) {
+            try {
+              await persistRemoteDashboardState({
+                snapshot: localSnapshot,
+                batches: {
+                  standard: [],
+                  australia: [],
+                  updatedAt: pushedAt,
+                },
+                updatedAt: pushedAt,
+              });
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.warn(
+                "[metric-planitar] snapshot push failed (continuing):",
+                err
+              );
+            }
           }
 
           async function pushOne(
@@ -407,10 +435,10 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             }
           }
 
-          for (const b of localBatches.standard ?? []) {
+          for (const b of missingStandard) {
             await pushOne("standard", b);
           }
-          for (const b of localBatches.australia ?? []) {
+          for (const b of missingAustralia) {
             await pushOne("australia", b);
           }
 
@@ -418,7 +446,9 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           console.info(
             `[metric-planitar] cloud recovery: ${pushed} pushed, ${failed} failed`
           );
-          return;
+          // Fall through to the normal hydrate logic below — if the push
+          // succeeded, the cloud is now caught up; if it failed for some
+          // batches, the next refresh retries the remaining ones.
         }
 
         const localUpdatedAt = Math.max(
