@@ -8,6 +8,7 @@ const { UploadRow } = require("./UploadRow");
 const { ManualDayAdjustment } = require("./ManualDayAdjustment");
 const { ScheduleBatch } = require("./ScheduleBatchModel");
 const { PersonConfig } = require("./PersonConfig");
+const { User } = require("./User");
 
 Snapshot.hasMany(SnapshotTeam, {
   foreignKey: "snapshotId",
@@ -48,4 +49,5 @@ module.exports = {
   ManualDayAdjustment,
   ScheduleBatch,
   PersonConfig,
+  User,
 };

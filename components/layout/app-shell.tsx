@@ -8,12 +8,14 @@ import {
   readPersistedUploadBatches,
   writePersistedUploadBatches,
 } from "@/lib/store/upload-batches";
-import { EditorIdentityPrompt } from "@/components/layout/editor-identity-prompt";
+// EditorIdentityPrompt removed: identity now comes from the authenticated
+// session, so the manual "who is editing?" prompt is no longer needed.
 import {
   EDITOR_IDENTITY_EVENT,
   readEditorIdentity,
   writeEditorIdentity,
 } from "@/lib/store/editor-identity";
+import { useAuth } from "@/lib/auth/use-auth";
 import { readAllAdjustmentsLocal } from "@/lib/store/manual-day-adjustments";
 import { readLocalScheduleBatches } from "@/lib/store/schedule-batches";
 import { migrateLocalToCloudIfNeeded } from "@/lib/api/initial-sync";
@@ -194,6 +196,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const snapshot = useDashboardSnapshot();
   const { language, setLanguage } = useAppLanguage();
+  const { user: authUser, status: authStatus, logout: authLogout } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [query, setQuery] = useState("");
@@ -202,6 +205,47 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const [hasLoadedFileIndex, setHasLoadedFileIndex] = useState(false);
   const [hasAttemptedCloudBootstrap, setHasAttemptedCloudBootstrap] = useState(false);
   const [editorIdentity, setEditorIdentity] = useState<string | null>(null);
+
+  // Pages that don't render the chrome / sidebar — they show their own
+  // standalone layout (the login form, the forced-password-change form).
+  const isAuthRoute =
+    pathname === "/login" || pathname === "/change-password";
+
+  // Redirect anonymous users to /login (preserving the intended path).
+  useEffect(() => {
+    if (authStatus === "anonymous" && !isAuthRoute) {
+      const next =
+        pathname && pathname !== "/"
+          ? `?next=${encodeURIComponent(pathname)}`
+          : "";
+      router.replace(`/login${next}`);
+    }
+  }, [authStatus, isAuthRoute, pathname, router]);
+
+  // Force a logged-in user with a temp password to set a real one before
+  // they can use the rest of the app.
+  useEffect(() => {
+    if (
+      authStatus === "authenticated" &&
+      authUser?.mustChangePassword &&
+      pathname !== "/change-password"
+    ) {
+      router.replace("/change-password");
+    }
+  }, [authStatus, authUser, pathname, router]);
+
+  useEffect(() => {
+    // Mirror the logged-in display name into the legacy editor-identity
+    // store so adjustments still record an "updatedBy" tag without prompting.
+    if (authUser?.displayName) {
+      try {
+        const current = readEditorIdentity();
+        if (!current || current !== authUser.displayName) {
+          writeEditorIdentity(authUser.displayName);
+        }
+      } catch {}
+    }
+  }, [authUser?.displayName]);
 
   useEffect(() => {
     setEditorIdentity(readEditorIdentity());
@@ -502,6 +546,28 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
   const showSearchPanel = focusSearch && query.trim().length > 0;
 
+  // Auth pages render their own standalone layout (no sidebar / search bar).
+  if (isAuthRoute) {
+    return <>{children}</>;
+  }
+
+  // While we're still figuring out the auth state, render nothing instead of
+  // a momentary flash of the full app for an anonymous user.
+  if (authStatus === "loading") {
+    return null;
+  }
+
+  // Anonymous users are being redirected to /login by the effect above —
+  // render nothing in the meantime so we don't briefly show app chrome.
+  if (authStatus === "anonymous") {
+    return null;
+  }
+
+  // Same for users that still need to set their first real password.
+  if (authUser?.mustChangePassword) {
+    return null;
+  }
+
   return (
     <div className={`min-h-screen lg:grid ${shellCols} transition-all duration-300`}>
       <aside
@@ -545,27 +611,57 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           className={`mt-8 rounded-2xl border border-slate-200 bg-white p-4 transition-all duration-300 ${
             collapsed ? "px-2 py-3" : ""
           }`}
-          title={collapsed ? "Workspace: Sebastian Cuervo" : undefined}
+          title={collapsed ? authUser?.displayName ?? undefined : undefined}
         >
           {!collapsed ? (
             <>
               <p className="text-xs uppercase tracking-wider text-slate-400">
-                {language === "es" ? "Editando como" : "Editing as"}
+                {language === "es" ? "Sesión iniciada" : "Signed in as"}
               </p>
               <p className="mt-2 text-sm font-semibold text-slate-900">
-                {editorIdentity || (language === "es" ? "Sin identidad" : "No identity")}
+                {authUser?.displayName ??
+                  editorIdentity ??
+                  (language === "es" ? "Sin identidad" : "No identity")}
               </p>
-              <button
-                type="button"
-                onClick={() => writeEditorIdentity("")}
-                className="mt-1 text-[11px] font-medium text-blue-700 hover:underline"
-              >
-                {language === "es" ? "Cambiar nombre" : "Change name"}
-              </button>
+              {authUser ? (
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  {authUser.email}
+                  {authUser.role === "leader" ? (
+                    <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                      Líder
+                    </span>
+                  ) : authUser.team ? (
+                    <span className="ml-1 inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                      {authUser.team}
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
+              {authUser ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    authLogout();
+                    router.replace("/login");
+                  }}
+                  className="mt-2 text-[11px] font-medium text-blue-700 hover:underline"
+                >
+                  {language === "es" ? "Cerrar sesión" : "Sign out"}
+                </button>
+              ) : null}
             </>
           ) : (
-            <div className="grid place-items-center text-xs font-semibold text-slate-700">
-              {editorIdentity ? editorIdentity.slice(0, 2).toUpperCase() : "??"}
+            <div
+              className="grid place-items-center text-xs font-semibold text-slate-700"
+              title={authUser?.email}
+            >
+              {(authUser?.displayName || editorIdentity || "??")
+                .split(" ")
+                .map((p) => p[0])
+                .filter(Boolean)
+                .slice(0, 2)
+                .join("")
+                .toUpperCase() || "??"}
             </div>
           )}
         </div>
@@ -850,7 +946,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AppLanguageProvider>
       <AppShellInner>{children}</AppShellInner>
-      <EditorIdentityPrompt />
     </AppLanguageProvider>
   );
 }

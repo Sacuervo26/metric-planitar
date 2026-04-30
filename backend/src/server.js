@@ -9,6 +9,7 @@ const snapshotsRouter = require("./routes/snapshots");
 const adjustmentsRouter = require("./routes/adjustments");
 const scheduleRouter = require("./routes/schedule");
 const personConfigRouter = require("./routes/personConfig");
+const authRouter = require("./routes/auth");
 const { requireApiKey } = require("./middleware/auth");
 
 const app = express();
@@ -41,6 +42,19 @@ if (!process.env.API_KEY) {
     "[backend] WARNING: API_KEY not set — all requests accepted. Set API_KEY in .env before deploying."
   );
 }
+
+// Auth routes use a stricter rate limit so brute-force login attempts are
+// throttled. /auth/login itself is intentionally PUBLIC (no API key) so the
+// frontend can request a session token. The login handler enforces the
+// password check.
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use("/auth", authLimiter, authRouter);
 
 app.use("/cloud-state", cloudStateLimiter, requireApiKey, cloudStateRouter);
 app.use("/snapshots", cloudStateLimiter, requireApiKey, snapshotsRouter);
