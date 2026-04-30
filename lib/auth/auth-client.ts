@@ -20,6 +20,7 @@ export type AuthUser = {
   role: "leader" | "member";
   bio: string | null;
   photoDataUrl: string | null;
+  coverDataUrl: string | null;
   mustChangePassword: boolean;
   lastLoginAt: string | null;
   lastActiveAt: string | null;
@@ -135,6 +136,7 @@ export async function fetchMe(): Promise<AuthUser | null> {
 export async function updateProfileRequest(payload: {
   bio?: string | null;
   photoDataUrl?: string | null;
+  coverDataUrl?: string | null;
 }): Promise<AuthUser> {
   if (!API_BASE) {
     throw new Error("NEXT_PUBLIC_API_URL no está configurado");

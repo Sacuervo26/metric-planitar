@@ -85,6 +85,21 @@ app.use((err, _req, res, _next) => {
 
 async function start() {
   await sequelize.authenticate();
+
+  // Best-effort schema upgrades for hosts where shell migrations can't run
+  // (e.g. Render free tier). Each statement is idempotent — Postgres treats
+  // "ADD COLUMN IF NOT EXISTS" as a no-op when the column already exists.
+  try {
+    await sequelize.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS "coverDataUrl" TEXT'
+    );
+  } catch (err) {
+    console.warn(
+      "[backend] schema-upgrade ensure(coverDataUrl) failed:",
+      err.message
+    );
+  }
+
   app.listen(PORT, () => {
     console.log(`[backend] listening on http://localhost:${PORT}`);
   });

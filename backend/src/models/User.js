@@ -56,6 +56,10 @@ const User = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    coverDataUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
     mustChangePassword: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

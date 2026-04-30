@@ -62,10 +62,13 @@ router.get("/me", requireAuth, async (req, res, next) => {
 // under /admin/users/:id (separate concern).
 const MAX_BIO_LENGTH = 1500;
 const MAX_PHOTO_DATA_URL_LENGTH = 800_000; // ~600KB worth of base64
+const MAX_COVER_DATA_URL_LENGTH = 1_500_000; // ~1.1MB worth of base64
+
+const DATA_URL_PATTERN = /^data:image\/(png|jpeg|jpg|webp|gif);base64,/;
 
 router.patch("/me/profile", requireAuth, async (req, res, next) => {
   try {
-    const { bio, photoDataUrl } = req.body || {};
+    const { bio, photoDataUrl, coverDataUrl } = req.body || {};
     const patch = {};
 
     if (typeof bio === "string") {
@@ -86,11 +89,7 @@ router.patch("/me/profile", requireAuth, async (req, res, next) => {
             "La foto es demasiado grande. Sube una imagen más pequeña (máx ~500 KB).",
         });
       }
-      // Quick sanity check: must look like a data URL.
-      if (
-        photoDataUrl.length > 0 &&
-        !/^data:image\/(png|jpeg|jpg|webp|gif);base64,/.test(photoDataUrl)
-      ) {
+      if (photoDataUrl.length > 0 && !DATA_URL_PATTERN.test(photoDataUrl)) {
         return res.status(400).json({
           error: "La imagen debe estar codificada como data URL base64.",
         });
@@ -98,6 +97,23 @@ router.patch("/me/profile", requireAuth, async (req, res, next) => {
       patch.photoDataUrl = photoDataUrl || null;
     } else if (photoDataUrl === null) {
       patch.photoDataUrl = null;
+    }
+
+    if (typeof coverDataUrl === "string") {
+      if (coverDataUrl.length > MAX_COVER_DATA_URL_LENGTH) {
+        return res.status(400).json({
+          error:
+            "La portada es demasiado grande. Sube una imagen más pequeña (máx ~1 MB).",
+        });
+      }
+      if (coverDataUrl.length > 0 && !DATA_URL_PATTERN.test(coverDataUrl)) {
+        return res.status(400).json({
+          error: "La portada debe estar codificada como data URL base64.",
+        });
+      }
+      patch.coverDataUrl = coverDataUrl || null;
+    } else if (coverDataUrl === null) {
+      patch.coverDataUrl = null;
     }
 
     if (Object.keys(patch).length === 0) {
