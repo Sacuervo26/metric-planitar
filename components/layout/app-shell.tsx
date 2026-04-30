@@ -22,7 +22,10 @@ import {
   DASHBOARD_SNAPSHOT_KEY,
   type DashboardSnapshot,
 } from "@/lib/store/dashboard-snapshot";
-import { fetchRemoteDashboardState } from "@/lib/store/remote-dashboard-state";
+import {
+  fetchRemoteDashboardState,
+  persistRemoteDashboardState,
+} from "@/lib/store/remote-dashboard-state";
 import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
 
 type NavItem = {
@@ -233,15 +236,46 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         if (cancelled || !remote.configured || !remote.state) return;
 
         let localSnapshotGeneratedAt = 0;
+        let localSnapshot: DashboardSnapshot | null = null;
         try {
           const rawLocalSnapshot = localStorage.getItem(DASHBOARD_SNAPSHOT_KEY);
           if (rawLocalSnapshot) {
             const parsed = JSON.parse(rawLocalSnapshot) as DashboardSnapshot;
+            localSnapshot = parsed;
             localSnapshotGeneratedAt = Date.parse(parsed.generatedAt ?? "") || 0;
           }
         } catch {}
 
         const localBatches = await readPersistedUploadBatches();
+        const localStandardCount = localBatches.standard?.length ?? 0;
+        const localAustraliaCount = localBatches.australia?.length ?? 0;
+        const localHasBatches = localStandardCount + localAustraliaCount > 0;
+
+        const remoteStandardCount =
+          remote.state.batches?.standard?.length ?? 0;
+        const remoteAustraliaCount =
+          remote.state.batches?.australia?.length ?? 0;
+        const remoteHasBatches =
+          remoteStandardCount + remoteAustraliaCount > 0;
+
+        // SAFETY NET: never wipe local data with empty remote data.
+        // If local has CSV batches but the cloud is empty (e.g. a previous
+        // sync attempt failed silently), recover by pushing local → cloud
+        // instead of pulling cloud → local. This prevents the data-loss bug
+        // where opening a new tab erased uploaded metrics.
+        if (localHasBatches && !remoteHasBatches) {
+          try {
+            await persistRemoteDashboardState({
+              snapshot: localSnapshot,
+              batches: localBatches,
+              updatedAt: localBatches.updatedAt || new Date().toISOString(),
+            });
+          } catch {
+            // best-effort recovery; local IndexedDB still has the data
+          }
+          return;
+        }
+
         const localUpdatedAt = Math.max(
           Date.parse(localBatches.updatedAt ?? "") || 0,
           localSnapshotGeneratedAt
@@ -251,9 +285,14 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           Date.parse(remote.state.snapshot?.generatedAt ?? "") || 0
         );
 
+        // Only overwrite local if either (a) local is completely empty, or
+        // (b) remote actually has data AND its timestamp is strictly newer
+        // than local. Empty remote can never win against non-empty local.
         const shouldHydrate =
-          localUpdatedAt === 0 ||
-          (remoteUpdatedAt > 0 && remoteUpdatedAt > localUpdatedAt);
+          !localHasBatches ||
+          (remoteHasBatches &&
+            remoteUpdatedAt > 0 &&
+            remoteUpdatedAt > localUpdatedAt);
 
         if (!shouldHydrate) return;
 

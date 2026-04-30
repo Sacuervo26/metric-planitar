@@ -93,6 +93,7 @@ async function loadBatches() {
   });
 
   const grouped = { standard: [], australia: [] };
+  let latestUploadedAt = 0;
   for (const b of rows) {
     grouped[b.region].push({
       id: b.id,
@@ -101,8 +102,10 @@ async function loadBatches() {
       rowCount: b.rowCount,
       rows: (b.rows || []).map((r) => r.data),
     });
+    const t = b.uploadedAt ? new Date(b.uploadedAt).getTime() : 0;
+    if (Number.isFinite(t) && t > latestUploadedAt) latestUploadedAt = t;
   }
-  return grouped;
+  return { grouped, latestUploadedAt };
 }
 
 router.get("/", async (_req, res, next) => {
@@ -116,15 +119,30 @@ router.get("/", async (_req, res, next) => {
       ],
     });
 
-    const batches = await loadBatches();
+    const { grouped, latestUploadedAt } = await loadBatches();
+
+    // Use the real last-uploaded timestamp for the batches block. Falling
+    // back to "now" (the previous behavior) made the cloud always look
+    // newer than local during bootstrap, which combined with empty cloud
+    // batches could overwrite local data and erase recently-uploaded CSVs.
+    const batchesUpdatedAt = latestUploadedAt
+      ? new Date(latestUploadedAt).toISOString()
+      : null;
+
+    const snapshotUpdatedAt = latest ? latest.updatedAt.toISOString() : null;
+
+    const stateUpdatedAt =
+      snapshotUpdatedAt || batchesUpdatedAt || new Date(0).toISOString();
 
     const state = {
       snapshot: snapshotToApi(latest),
       batches: {
-        ...batches,
-        updatedAt: new Date().toISOString(),
+        ...grouped,
+        // If there are no batches at all, expose epoch so the frontend can
+        // safely detect "remote has nothing" instead of mistaking it for new.
+        updatedAt: batchesUpdatedAt || new Date(0).toISOString(),
       },
-      updatedAt: latest ? latest.updatedAt.toISOString() : new Date().toISOString(),
+      updatedAt: stateUpdatedAt,
     };
 
     res.json({ configured: true, state });
@@ -248,19 +266,26 @@ router.post("/", validateCloudState, async (req, res, next) => {
         { model: SnapshotPresetDistribution, as: "presetDistribution" },
       ],
     });
-    const batches = await loadBatches();
+    const { grouped, latestUploadedAt } = await loadBatches();
+
+    const batchesUpdatedAt =
+      payload.batches?.updatedAt ||
+      (latestUploadedAt ? new Date(latestUploadedAt).toISOString() : null) ||
+      new Date(0).toISOString();
+
+    const snapshotUpdatedAt = latest ? latest.updatedAt.toISOString() : null;
+    const stateUpdatedAt =
+      snapshotUpdatedAt || batchesUpdatedAt || new Date(0).toISOString();
 
     res.json({
       configured: true,
       state: {
         snapshot: snapshotToApi(latest),
         batches: {
-          ...batches,
-          updatedAt: payload.batches?.updatedAt || new Date().toISOString(),
+          ...grouped,
+          updatedAt: batchesUpdatedAt,
         },
-        updatedAt: latest
-          ? latest.updatedAt.toISOString()
-          : new Date().toISOString(),
+        updatedAt: stateUpdatedAt,
       },
     });
   } catch (err) {
