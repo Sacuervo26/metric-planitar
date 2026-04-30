@@ -19,6 +19,7 @@ import type {
   TeamMemberSnapshotRow,
 } from "@/lib/store/dashboard-snapshot";
 import { useAppLanguage } from "@/lib/i18n/app-language";
+import { useAuth } from "@/lib/auth/use-auth";
 import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
 import type { WeeklyTeamRow } from "@/lib/metrics/types";
 import { InfoTooltip } from "@/components/shared/info-tooltip";
@@ -659,6 +660,26 @@ function TopThreeCard({
 
 function EmptyState() {
   const { language } = useAppLanguage();
+  const { user: authUser } = useAuth();
+  const isLeader = authUser?.role === "leader";
+
+  if (!isLeader) {
+    return (
+      <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+        <h2 className="font-[var(--font-space-grotesk)] text-2xl font-semibold text-slate-900">
+          {language === "es"
+            ? "Aún no hay datos disponibles"
+            : "No data is available yet"}
+        </h2>
+        <p className="mt-2 max-w-xl text-sm text-slate-600">
+          {language === "es"
+            ? "Espera a que un líder del equipo cargue las métricas más recientes."
+            : "Wait for a team leader to upload the latest metrics."}
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
       <h2 className="font-[var(--font-space-grotesk)] text-2xl font-semibold text-slate-900">

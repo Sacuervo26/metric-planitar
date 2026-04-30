@@ -26,6 +26,7 @@ import {
 } from "recharts";
 import { useAppLanguage } from "@/lib/i18n/app-language";
 import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
+import { useAuth } from "@/lib/auth/use-auth";
 import type {
   SnapshotPresetMode,
   TeamMemberSnapshotRow,
@@ -808,6 +809,8 @@ function TeamsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const snapshot = useDashboardSnapshot();
+  const { user: authUser } = useAuth();
+  const isLeader = authUser?.role === "leader";
   const isSpanish = language === "es";
   const t = (en: string, es: string) => (isSpanish ? es : en);
   const personConfig = usePersonConfigStore();
@@ -1971,15 +1974,29 @@ function TeamsPageContent() {
 
       {!snapshot && (
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm text-slate-600">
-            No operational data is loaded yet. Go to Data Center and process a CSV.
-          </p>
-          <Link
-            href="/upload"
-            className="mt-4 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
-          >
-            Go to Data Center
-          </Link>
+          {isLeader ? (
+            <>
+              <p className="text-sm text-slate-600">
+                {t(
+                  "No operational data is loaded yet. Go to Data Center and process a CSV.",
+                  "Aún no hay datos operativos. Ve al Data Center y procesa un CSV."
+                )}
+              </p>
+              <Link
+                href="/upload"
+                className="mt-4 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+              >
+                {t("Go to Data Center", "Ir a Data Center")}
+              </Link>
+            </>
+          ) : (
+            <p className="text-sm text-slate-600">
+              {t(
+                "No data is available yet. Wait for a team leader to upload the latest metrics.",
+                "Aún no hay datos disponibles. Espera a que un líder cargue las métricas más recientes."
+              )}
+            </p>
+          )}
         </section>
       )}
 

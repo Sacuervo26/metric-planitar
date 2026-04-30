@@ -3369,15 +3369,25 @@ export default function PersonProfilePage() {
 
       {!snapshot && (
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm text-slate-600">
-            No snapshot is available yet. Upload files in Data Center.
-          </p>
-          <Link
-            href="/upload"
-            className="mt-4 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
-          >
-            Go to Data Center
-          </Link>
+          {authUser?.role === "leader" ? (
+            <>
+              <p className="text-sm text-slate-600">
+                No snapshot is available yet. Upload files in Data Center.
+              </p>
+              <Link
+                href="/upload"
+                className="mt-4 inline-flex rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+              >
+                Go to Data Center
+              </Link>
+            </>
+          ) : (
+            <p className="text-sm text-slate-600">
+              {isSpanish
+                ? "Aún no hay datos disponibles. Espera a que un líder cargue las métricas más recientes."
+                : "No data is available yet. Wait for a team leader to upload the latest metrics."}
+            </p>
+          )}
         </section>
       )}
 
