@@ -7,6 +7,7 @@ import { AppLanguageProvider, useAppLanguage } from "@/lib/i18n/app-language";
 import {
   readPersistedUploadBatches,
   writePersistedUploadBatches,
+  type PersistedUploadBatches,
 } from "@/lib/store/upload-batches";
 // EditorIdentityPrompt removed: identity now comes from the authenticated
 // session, so the manual "who is editing?" prompt is no longer needed.
@@ -350,29 +351,73 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         // instead of pulling cloud → local. This prevents the data-loss bug
         // where opening a new tab erased uploaded metrics.
         if (localHasBatches && !remoteHasBatches) {
+          // Push one batch per request to keep each POST under Render's
+          // free-tier limits and to make cold-start timeouts non-fatal:
+          // a failure on batch 7/17 still leaves batches 1–6 in the cloud.
+          // The /cloud-state POST endpoint upserts batches by id without
+          // deleting the others, so partial pushes are safe.
+          // eslint-disable-next-line no-console
+          console.info(
+            `[metric-planitar] cloud batches empty, pushing locally cached ` +
+              `${localStandardCount} std + ${localAustraliaCount} aus batches one at a time`
+          );
+
+          let pushed = 0;
+          let failed = 0;
+          const pushedAt = new Date().toISOString();
+
+          // First, push the snapshot alone (small) so the dashboard
+          // skeleton lights up immediately for other devices.
           try {
-            // eslint-disable-next-line no-console
-            console.info(
-              `[metric-planitar] cloud batches empty, pushing local copy (` +
-                `${localStandardCount} std + ${localAustraliaCount} aus batches)`
-            );
             await persistRemoteDashboardState({
               snapshot: localSnapshot,
-              batches: localBatches,
-              updatedAt: localBatches.updatedAt || new Date().toISOString(),
+              batches: { standard: [], australia: [], updatedAt: pushedAt },
+              updatedAt: pushedAt,
             });
-            // eslint-disable-next-line no-console
-            console.info("[metric-planitar] cloud recovery push succeeded");
           } catch (err) {
-            // Surface to the console so we can diagnose 413 / 500 / network
-            // errors instead of swallowing them. Local IndexedDB still has
-            // the data, so the user isn't blocked from working.
             // eslint-disable-next-line no-console
-            console.error(
-              "[metric-planitar] cloud recovery push FAILED:",
+            console.warn(
+              "[metric-planitar] snapshot push failed (continuing with batches):",
               err
             );
           }
+
+          async function pushOne(
+            region: "standard" | "australia",
+            batch: PersistedUploadBatches["standard"][number]
+          ) {
+            try {
+              await persistRemoteDashboardState({
+                snapshot: null,
+                batches: {
+                  standard: region === "standard" ? [batch] : [],
+                  australia: region === "australia" ? [batch] : [],
+                  updatedAt: pushedAt,
+                },
+                updatedAt: pushedAt,
+              });
+              pushed += 1;
+            } catch (err) {
+              failed += 1;
+              // eslint-disable-next-line no-console
+              console.error(
+                `[metric-planitar] push failed for ${region}/${batch.fileName}:`,
+                err
+              );
+            }
+          }
+
+          for (const b of localBatches.standard ?? []) {
+            await pushOne("standard", b);
+          }
+          for (const b of localBatches.australia ?? []) {
+            await pushOne("australia", b);
+          }
+
+          // eslint-disable-next-line no-console
+          console.info(
+            `[metric-planitar] cloud recovery: ${pushed} pushed, ${failed} failed`
+          );
           return;
         }
 
