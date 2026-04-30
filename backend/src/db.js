@@ -3,6 +3,7 @@ const path = require("path");
 const fs = require("fs");
 
 const dialect = process.env.DB_DIALECT || "sqlite";
+const databaseUrl = process.env.DATABASE_URL;
 
 let sequelize;
 
@@ -18,6 +19,25 @@ if (dialect === "sqlite") {
     dialect: "sqlite",
     storage,
     logging: false,
+  });
+} else if (databaseUrl) {
+  // Hosted providers (Render, Railway, Heroku, etc.) expose a single
+  // DATABASE_URL like "postgresql://user:pass@host:port/db". Sequelize can
+  // parse it directly. SSL is required for managed Postgres on Render.
+  const dialectOptions =
+    dialect === "postgres"
+      ? {
+          ssl: {
+            require: true,
+            rejectUnauthorized: false,
+          },
+        }
+      : undefined;
+
+  sequelize = new Sequelize(databaseUrl, {
+    dialect,
+    logging: false,
+    dialectOptions,
   });
 } else {
   sequelize = new Sequelize(

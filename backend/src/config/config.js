@@ -15,6 +15,17 @@ function sqliteConfig() {
 }
 
 function networkedConfig() {
+  if (process.env.DATABASE_URL) {
+    return {
+      url: process.env.DATABASE_URL,
+      dialect,
+      logging: false,
+      dialectOptions:
+        dialect === "postgres"
+          ? { ssl: { require: true, rejectUnauthorized: false } }
+          : undefined,
+    };
+  }
   return {
     dialect,
     host: process.env.DB_HOST || "localhost",
