@@ -481,16 +481,31 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             remoteUpdatedAt > 0 &&
             remoteUpdatedAt > localUpdatedAt);
 
+        // Always seed the dashboard snapshot from whatever we already
+        // got with the meta-only fetch. The snapshot is small (no row
+        // payloads), so this works even when the heavy full GET 502s
+        // from a free-tier worker that ran out of memory loading rows.
+        if (remote.state.snapshot) {
+          localStorage.setItem(
+            DASHBOARD_SNAPSHOT_KEY,
+            JSON.stringify(remote.state.snapshot)
+          );
+          window.dispatchEvent(new Event(DASHBOARD_SNAPSHOT_EVENT));
+        }
+
         if (!shouldHydrate) return;
 
-        // Now we actually need the row payloads — re-fetch with full data.
+        // Try to also hydrate the full row payloads so detailed views
+        // (Weekly History, daily files, profile/[name]) work. If this
+        // times out / OOMs, the dashboard already has the snapshot, so
+        // the user still sees aggregated metrics.
         let fullState = remote;
         try {
           fullState = await fetchRemoteDashboardState();
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn(
-            "[metric-planitar] full cloud-state fetch for hydration failed; keeping local",
+            "[metric-planitar] full cloud-state fetch for hydration failed; dashboard still has snapshot",
             err
           );
           return;
@@ -498,16 +513,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         if (cancelled || !fullState.state) return;
 
         await writePersistedUploadBatches(fullState.state.batches);
-
-        if (remote.state.snapshot) {
-          localStorage.setItem(
-            DASHBOARD_SNAPSHOT_KEY,
-            JSON.stringify(remote.state.snapshot)
-          );
-        } else {
-          localStorage.removeItem(DASHBOARD_SNAPSHOT_KEY);
-        }
-
         window.dispatchEvent(new Event(DASHBOARD_SNAPSHOT_EVENT));
       } catch {
       } finally {
