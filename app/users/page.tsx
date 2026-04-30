@@ -6,14 +6,27 @@ import { useAuth } from "@/lib/auth/use-auth";
 import {
   adminCreateUser,
   adminDeleteUser,
+  adminListPersonConfig,
   adminListUsers,
   adminResetUserPassword,
   adminUpdateUser,
+  adminUpsertPersonConfig,
   type CreateUserPayload,
+  type PersonConfigRecord,
+  type PersonFunctionName,
 } from "@/lib/api/admin-client";
 import type { AuthUser } from "@/lib/auth/auth-client";
 
 const TEAMS = ["RRECO1", "RRECO2", "RRECO3"] as const;
+const FUNCTION_OPTIONS: PersonFunctionName[] = [
+  "Draft",
+  "QA",
+  "Siteplans",
+  "Updates",
+  "Revit",
+];
+const LEVEL_OPTIONS = ["Junior", "Intermedio", "Senior"] as const;
+const PRIMARY_ROLE_OPTIONS = ["Drafter", "QA"] as const;
 
 function normalizeName(value: string) {
   return value
@@ -29,6 +42,9 @@ export default function UsersAdminPage() {
   const { user: me, status } = useAuth();
 
   const [users, setUsers] = useState<AuthUser[]>([]);
+  const [personConfigs, setPersonConfigs] = useState<
+    Record<string, PersonConfigRecord>
+  >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,8 +73,20 @@ export default function UsersAdminPage() {
     setLoading(true);
     setError(null);
     try {
-      const list = await adminListUsers();
+      // Pull users + their PersonConfig in parallel and key the configs by
+      // displayName so each row can look up its own settings.
+      const [list, configs] = await Promise.all([
+        adminListUsers(),
+        adminListPersonConfig().catch(() => [] as PersonConfigRecord[]),
+      ]);
       setUsers(list);
+      const map: Record<string, PersonConfigRecord> = {};
+      for (const cfg of configs) {
+        map[cfg.name] = cfg;
+        // Also key by lowercase for case-insensitive lookups.
+        map[cfg.name.toLowerCase()] = cfg;
+      }
+      setPersonConfigs(map);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error cargando usuarios");
     } finally {
@@ -203,6 +231,12 @@ export default function UsersAdminPage() {
                 <UserRow
                   key={u.id}
                   user={u}
+                  config={
+                    personConfigs[u.displayName] ??
+                    personConfigs[u.displayName.toLowerCase()] ??
+                    null
+                  }
+                  meDisplayName={me?.displayName}
                   isMe={u.id === me?.id}
                   isEditing={editingId === u.id}
                   onStartEdit={() => setEditingId(u.id)}
@@ -240,6 +274,8 @@ export default function UsersAdminPage() {
 
 function UserRow({
   user,
+  config,
+  meDisplayName,
   isMe,
   isEditing,
   onStartEdit,
@@ -249,6 +285,8 @@ function UserRow({
   onResetPassword,
 }: {
   user: AuthUser;
+  config: PersonConfigRecord | null;
+  meDisplayName: string | undefined;
   isMe: boolean;
   isEditing: boolean;
   onStartEdit: () => void;
@@ -257,30 +295,86 @@ function UserRow({
   onDeleted: () => void | Promise<void>;
   onResetPassword: (email: string, pwd: string) => void;
 }) {
+  const [email, setEmail] = useState(user.email);
   const [displayName, setDisplayName] = useState(user.displayName);
   const [team, setTeam] = useState<string>(user.team ?? "-");
   const [role, setRole] = useState<"leader" | "member">(user.role);
+  const [level, setLevel] = useState<string>(config?.level ?? "");
+  const [primaryRole, setPrimaryRole] = useState<string>(
+    config?.primaryRole ?? ""
+  );
+  const [functions, setFunctions] = useState<PersonFunctionName[]>(
+    (config?.functions ?? []).filter((f): f is PersonFunctionName =>
+      FUNCTION_OPTIONS.includes(f as PersonFunctionName)
+    )
+  );
   const [working, setWorking] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isEditing) {
+      setEmail(user.email);
       setDisplayName(user.displayName);
       setTeam(user.team ?? "-");
       setRole(user.role);
+      setLevel(config?.level ?? "");
+      setPrimaryRole(config?.primaryRole ?? "");
+      setFunctions(
+        (config?.functions ?? []).filter(
+          (f): f is PersonFunctionName =>
+            FUNCTION_OPTIONS.includes(f as PersonFunctionName)
+        )
+      );
       setRowError(null);
     }
-  }, [isEditing, user]);
+  }, [isEditing, user, config]);
+
+  function toggleFunction(fn: PersonFunctionName) {
+    setFunctions((prev) =>
+      prev.includes(fn) ? prev.filter((x) => x !== fn) : [...prev, fn]
+    );
+  }
 
   async function save() {
     setWorking("save");
     setRowError(null);
     try {
+      // 1) Update the User row (email, displayName, team, role).
       await adminUpdateUser(user.id, {
+        email: email.trim().toLowerCase(),
         displayName,
         team: team === "-" ? null : team,
         role,
       });
+
+      // 2) Sync the PersonConfig row by displayName so the metrics
+      //    pipeline picks up the level / primaryRole / functions.
+      try {
+        await adminUpsertPersonConfig({
+          name: displayName,
+          level: (level || null) as
+            | "Junior"
+            | "Intermedio"
+            | "Senior"
+            | null,
+          primaryRole: (primaryRole || null) as
+            | "Drafter"
+            | "QA"
+            | null,
+          functions,
+          isTeamLead: !!config?.isTeamLead,
+          updatedBy: meDisplayName,
+        });
+      } catch (cfgErr) {
+        // The user-row save already succeeded; surface the config
+        // error but don't make the row look like nothing happened.
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[users] PersonConfig save failed:",
+          cfgErr
+        );
+      }
+
       await onUpdated();
     } catch (err) {
       setRowError(err instanceof Error ? err.message : "Error al guardar");
@@ -333,57 +427,134 @@ function UserRow({
     return (
       <tr className="bg-blue-50/40">
         <td className="px-4 py-3" colSpan={6}>
-          <div className="flex flex-wrap gap-2 items-end">
-            <label className="flex flex-col">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                Nombre
-              </span>
-              <input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
-              />
-            </label>
-            <label className="flex flex-col">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                Pod
-              </span>
-              <select
-                value={team}
-                onChange={(e) => setTeam(e.target.value)}
-                className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
-              >
-                <option value="-">Sin pod</option>
-                {TEAMS.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                Rol
-              </span>
-              <select
-                value={role}
-                onChange={(e) =>
-                  setRole(e.target.value as "leader" | "member")
-                }
-                className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
-                disabled={isMe && role === "leader"}
-                title={
-                  isMe && role === "leader"
-                    ? "Otro líder debe degradarte para evitar quedarse sin admins."
-                    : undefined
-                }
-              >
-                <option value="member">Miembro</option>
-                <option value="leader">Líder</option>
-              </select>
-            </label>
-            <div className="ml-auto flex gap-2">
+          <div className="space-y-3">
+            {/* Identity row */}
+            <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
+              <label className="flex flex-col">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Nombre
+                </span>
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
+                />
+              </label>
+              <label className="flex flex-col">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Correo
+                </span>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
+                />
+              </label>
+              <label className="flex flex-col">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Pod
+                </span>
+                <select
+                  value={team}
+                  onChange={(e) => setTeam(e.target.value)}
+                  className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
+                >
+                  <option value="-">Sin pod</option>
+                  {TEAMS.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Rol
+                </span>
+                <select
+                  value={role}
+                  onChange={(e) =>
+                    setRole(e.target.value as "leader" | "member")
+                  }
+                  className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
+                  disabled={isMe && role === "leader"}
+                  title={
+                    isMe && role === "leader"
+                      ? "Otro líder debe degradarte para evitar quedarse sin admins."
+                      : undefined
+                  }
+                >
+                  <option value="member">Miembro</option>
+                  <option value="leader">Líder</option>
+                </select>
+              </label>
+            </div>
+
+            {/* Person config row: level / primary role / functions */}
+            <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+              <label className="flex flex-col">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Nivel
+                </span>
+                <select
+                  value={level}
+                  onChange={(e) => setLevel(e.target.value)}
+                  className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
+                >
+                  <option value="">— Sin definir —</option>
+                  {LEVEL_OPTIONS.map((l) => (
+                    <option key={l} value={l}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Rol primario
+                </span>
+                <select
+                  value={primaryRole}
+                  onChange={(e) => setPrimaryRole(e.target.value)}
+                  className="mt-0.5 rounded border border-slate-300 px-2 py-1 text-sm"
+                >
+                  <option value="">— Sin definir —</option>
+                  {PRIMARY_ROLE_OPTIONS.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex flex-col">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Funciones
+                </span>
+                <div className="mt-0.5 flex flex-wrap gap-1.5 rounded border border-slate-200 bg-white px-2 py-1.5">
+                  {FUNCTION_OPTIONS.map((fn) => {
+                    const active = functions.includes(fn);
+                    return (
+                      <button
+                        key={fn}
+                        type="button"
+                        onClick={() => toggleFunction(fn)}
+                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold transition ${
+                          active
+                            ? "bg-blue-600 text-white"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        {fn}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 justify-end">
               <button
                 type="button"
                 onClick={save}

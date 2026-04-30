@@ -299,8 +299,27 @@ router.patch("/users/:id", requireLeader, async (req, res, next) => {
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
 
-    const { displayName, normalizedPersonName, team, role } = req.body || {};
+    const { email, displayName, normalizedPersonName, team, role } =
+      req.body || {};
     const patch = {};
+
+    if (typeof email === "string") {
+      const cleanEmail = email.trim().toLowerCase();
+      if (!cleanEmail.includes("@")) {
+        return res.status(400).json({ error: "Email inválido" });
+      }
+      if (cleanEmail !== target.email) {
+        const collision = await User.findOne({
+          where: { email: cleanEmail },
+        });
+        if (collision && collision.id !== target.id) {
+          return res
+            .status(409)
+            .json({ error: "Ya hay otra cuenta con ese correo." });
+        }
+        patch.email = cleanEmail;
+      }
+    }
 
     if (typeof displayName === "string" && displayName.trim()) {
       patch.displayName = displayName.trim();

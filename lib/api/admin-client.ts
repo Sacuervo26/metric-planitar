@@ -61,10 +61,37 @@ export type CreateUserPayload = {
 };
 
 export type UpdateUserPayload = {
+  email?: string;
   displayName?: string;
   normalizedPersonName?: string;
   team?: string | null;
   role?: "leader" | "member";
+};
+
+export type PersonFunctionName =
+  | "Draft"
+  | "QA"
+  | "Siteplans"
+  | "Updates"
+  | "Revit";
+
+export type PersonConfigPayload = {
+  name: string;
+  level?: "Junior" | "Intermedio" | "Senior" | null;
+  primaryRole?: "Drafter" | "QA" | null;
+  functions?: PersonFunctionName[];
+  isTeamLead?: boolean;
+  updatedBy?: string;
+};
+
+export type PersonConfigRecord = {
+  name: string;
+  level: string | null;
+  primaryRole: string | null;
+  functions: string[];
+  isTeamLead: boolean;
+  updatedBy: string | null;
+  updatedAt: string | null;
 };
 
 export type AdminUserCreateResult = {
@@ -122,4 +149,31 @@ export async function adminResetUserPassword(
     `/admin/users/${id}/reset-password`,
     { method: "POST" }
   );
+}
+
+/**
+ * List all PersonConfig rows (level / primaryRole / functions per name).
+ * Currently used by the /users admin page to merge with the user table
+ * so a leader can edit both the User row and its PersonConfig from a
+ * single form.
+ */
+export async function adminListPersonConfig(): Promise<PersonConfigRecord[]> {
+  const data = await request<{ people: PersonConfigRecord[] }>(
+    "/person-config"
+  );
+  return data.people;
+}
+
+export async function adminUpsertPersonConfig(
+  payload: PersonConfigPayload
+): Promise<PersonConfigRecord> {
+  const data = await request<{ person: PersonConfigRecord }>(
+    "/person-config",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  return data.person;
 }

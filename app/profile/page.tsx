@@ -222,20 +222,17 @@ export default function ProfilePage() {
   const headline = headlineParts.join(" · ");
 
   return (
-    <div className="space-y-6">
-      <ProfileHeroCard
+    <div>
+      <ProfileFullCard
         user={authUser}
         countryGradient={myCountryMeta?.heroBackgroundImage}
         countryName={myCountryMeta?.name}
         metricsHref={myMetricsHref}
         headline={headline}
+        config={myConfig}
         onEdit={() => setEditing(true)}
         t={t}
       />
-
-      <ProfileBioCard bio={authUser.bio} t={t} />
-
-      <ProfileFunctionsCard config={myConfig} t={t} />
 
       {editing ? (
         <ProfileEditModal
@@ -257,12 +254,18 @@ export default function ProfilePage() {
  *  Hero card (cover, avatar, name, headline, action buttons)
  * ───────────────────────────────────────────────────────────────────── */
 
-function ProfileHeroCard({
+/**
+ * Single card containing every profile section so the page reads as one
+ * unit (cover → identity strip → divider → about → divider → functions)
+ * instead of three stacked cards.
+ */
+function ProfileFullCard({
   user,
   countryGradient,
   countryName,
   metricsHref,
   headline,
+  config,
   onEdit,
   t,
 }: {
@@ -271,9 +274,18 @@ function ProfileHeroCard({
   countryName: string | undefined;
   metricsHref: string;
   headline: string;
+  config: PersonConfigEntry | null;
   onEdit: () => void;
   t: (en: string, es: string) => string;
 }) {
+  const functions = config?.functions ?? [];
+  const subTagLine = [
+    config?.primaryRole,
+    config?.level,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
       {/* Cover */}
@@ -440,88 +452,57 @@ function ProfileHeroCard({
             </Link>
           </div>
         </div>
-      </div>
-    </section>
-  );
-}
 
-/* ─────────────────────────────────────────────────────────────────────
- *  About card
- * ───────────────────────────────────────────────────────────────────── */
-
-function ProfileBioCard({
-  bio,
-  t,
-}: {
-  bio: string | null;
-  t: (en: string, es: string) => string;
-}) {
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white px-7 py-6 shadow-sm sm:px-10">
-      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-        {t("About", "Sobre mí")}
-      </p>
-      {bio && bio.trim().length > 0 ? (
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-          {bio}
-        </p>
-      ) : (
-        <p className="mt-3 text-sm italic text-slate-400">
-          {t(
-            "No description yet. Click 'Edit profile' to add one.",
-            "Aún no has agregado una descripción. Haz click en 'Editar perfil' para escribir una."
-          )}
-        </p>
-      )}
-    </section>
-  );
-}
-
-/* ─────────────────────────────────────────────────────────────────────
- *  Functions / skills card
- * ───────────────────────────────────────────────────────────────────── */
-
-function ProfileFunctionsCard({
-  config,
-  t,
-}: {
-  config: PersonConfigEntry | null;
-  t: (en: string, es: string) => string;
-}) {
-  const functions = config?.functions ?? [];
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white px-7 py-6 shadow-sm sm:px-10">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
-          {t("Functions", "Funciones")}
-        </p>
-        {config?.level || config?.primaryRole ? (
-          <p className="text-xs text-slate-500">
-            {[config?.primaryRole, config?.level]
-              .filter(Boolean)
-              .join(" · ")}
+        {/* About section */}
+        <div className="mt-6 border-t border-slate-100 pt-5">
+          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+            {t("About", "Sobre mí")}
           </p>
-        ) : null}
-      </div>
-      {functions.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {functions.map((fn) => (
-            <span
-              key={fn}
-              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700"
-            >
-              {fn}
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p className="mt-3 text-sm italic text-slate-400">
-          {t(
-            "No functions configured yet. A leader can set them from the Data Center.",
-            "Aún no hay funciones configuradas. Un líder puede asignarlas desde el Data Center."
+          {user.bio && user.bio.trim().length > 0 ? (
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+              {user.bio}
+            </p>
+          ) : (
+            <p className="mt-2 text-sm italic text-slate-400">
+              {t(
+                "No description yet. Click 'Edit profile' to add one.",
+                "Aún no has agregado una descripción. Haz click en 'Editar perfil' para escribir una."
+              )}
+            </p>
           )}
-        </p>
-      )}
+        </div>
+
+        {/* Functions section */}
+        <div className="mt-6 border-t border-slate-100 pt-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
+              {t("Functions", "Funciones")}
+            </p>
+            {subTagLine ? (
+              <p className="text-xs text-slate-500">{subTagLine}</p>
+            ) : null}
+          </div>
+          {functions.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {functions.map((fn) => (
+                <span
+                  key={fn}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700"
+                >
+                  {fn}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm italic text-slate-400">
+              {t(
+                "No functions configured yet. A leader can set them from the Users page.",
+                "Aún no hay funciones configuradas. Un líder puede asignarlas desde la página de Users."
+              )}
+            </p>
+          )}
+        </div>
+      </div>
     </section>
   );
 }
