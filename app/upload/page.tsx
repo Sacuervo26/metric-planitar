@@ -78,7 +78,7 @@ type PresetMode =
   | "gt10k";
 
 type Level = "Junior" | "Intermedio" | "Senior";
-type PrimaryRole = "Drafter" | "QA";
+type PrimaryRole = "Drafter" | "QA" | "Updates";
 type PersonFunction = "Draft" | "QA" | "Siteplans" | "Updates" | "Revit";
 
 type PersonConfig = {
@@ -3077,6 +3077,7 @@ export default function UploadPage() {
                 >
                   <option value="Drafter">Drafter</option>
                   <option value="QA">QA</option>
+                  <option value="Updates">Updates</option>
                 </select>
               </div>
 

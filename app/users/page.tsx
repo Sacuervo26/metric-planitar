@@ -26,7 +26,7 @@ const FUNCTION_OPTIONS: PersonFunctionName[] = [
   "Revit",
 ];
 const LEVEL_OPTIONS = ["Junior", "Intermedio", "Senior"] as const;
-const PRIMARY_ROLE_OPTIONS = ["Drafter", "QA"] as const;
+const PRIMARY_ROLE_OPTIONS = ["Drafter", "QA", "Updates"] as const;
 
 function normalizeName(value: string) {
   return value
@@ -360,6 +360,7 @@ function UserRow({
           primaryRole: (primaryRole || null) as
             | "Drafter"
             | "QA"
+            | "Updates"
             | null,
           functions,
           isTeamLead: !!config?.isTeamLead,

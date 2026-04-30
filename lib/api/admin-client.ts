@@ -78,7 +78,7 @@ export type PersonFunctionName =
 export type PersonConfigPayload = {
   name: string;
   level?: "Junior" | "Intermedio" | "Senior" | null;
-  primaryRole?: "Drafter" | "QA" | null;
+  primaryRole?: "Drafter" | "QA" | "Updates" | null;
   functions?: PersonFunctionName[];
   isTeamLead?: boolean;
   updatedBy?: string;

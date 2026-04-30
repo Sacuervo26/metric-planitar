@@ -49,7 +49,7 @@ import { matchesPreset } from "@/lib/presets/matches-preset";
 import type { CsvRow, PresetMode } from "@/lib/metrics/types";
 
 type Level = "Junior" | "Intermedio" | "Senior";
-type PrimaryRole = "Drafter" | "QA";
+type PrimaryRole = "Drafter" | "QA" | "Updates";
 type PersonFunction = "Draft" | "QA" | "Siteplans" | "Updates" | "Revit";
 type MetricTone = "emerald" | "amber" | "rose" | "slate";
 type TeamFilter = "all" | string;

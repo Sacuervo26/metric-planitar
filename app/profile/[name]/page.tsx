@@ -63,7 +63,7 @@ import { getCountryMetaFromTeam } from "@/lib/profile/country-theme";
 import { useAuth } from "@/lib/auth/use-auth";
 
 type Level = "Junior" | "Intermedio" | "Senior";
-type PrimaryRole = "Drafter" | "QA";
+type PrimaryRole = "Drafter" | "QA" | "Updates";
 type PersonFunction = "Draft" | "QA" | "Siteplans" | "Updates" | "Revit";
 type ProfileMode = "global" | "weekly";
 
