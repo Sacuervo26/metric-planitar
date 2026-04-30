@@ -60,6 +60,7 @@ import { readPersistedUploadBatches } from "@/lib/store/upload-batches";
 import { useDashboardSnapshot } from "@/lib/store/use-dashboard-snapshot";
 import { InfoTooltip } from "@/components/shared/info-tooltip";
 import { getCountryMetaFromTeam } from "@/lib/profile/country-theme";
+import { useAuth } from "@/lib/auth/use-auth";
 
 type Level = "Junior" | "Intermedio" | "Senior";
 type PrimaryRole = "Drafter" | "QA";
@@ -958,6 +959,7 @@ export default function PersonProfilePage() {
   const snapshot = useDashboardSnapshot();
   const params = useParams<{ name: string | string[] }>();
   const personConfig = usePersonConfigStore();
+  const { user: authUser } = useAuth();
   const rawName = params.name;
   const personName = decodeURIComponent(
     Array.isArray(rawName) ? (rawName[0] ?? "") : (rawName ?? "")
@@ -965,6 +967,15 @@ export default function PersonProfilePage() {
   const isSpanish = language === "es";
   const t = (en: string, es: string) => (isSpanish ? es : en);
   const normalizedPersonName = normalizeName(personName);
+
+  // Members can browse other people's profiles freely, but the per-week
+  // breakdown is private (it exposes day-by-day activity, schedule events,
+  // and Adicionales). Only the profile's owner and any leader can see it.
+  const isOwnProfile =
+    !!authUser?.normalizedPersonName &&
+    authUser.normalizedPersonName === normalizedPersonName;
+  const canSeeWeeklyHistory =
+    authUser?.role === "leader" || isOwnProfile;
   const [selectedPreset, setSelectedPreset] = useState<PersonPresetMode>("combined");
   const [profileMode, setProfileMode] = useState<ProfileMode>("global");
   const [selectedWeekKey, setSelectedWeekKey] = useState<"latest" | string>("latest");
@@ -2682,6 +2693,7 @@ export default function PersonProfilePage() {
             </article>
           </section>
 
+          {canSeeWeeklyHistory ? (
           <section className="rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -3171,6 +3183,18 @@ export default function PersonProfilePage() {
               </div>
             </div>
           </section>
+          ) : (
+            <section className="rounded-[30px] border border-dashed border-slate-300 bg-slate-50 p-6 shadow-sm">
+              <h2 className="font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-tight text-slate-950">
+                Weekly history
+              </h2>
+              <p className="mt-3 text-sm text-slate-500">
+                Esta sección es privada. Solo {personName} y los líderes del
+                equipo pueden ver el desglose semanal, los días detallados,
+                eventos del schedule y Adicionales de este perfil.
+              </p>
+            </section>
+          )}
 
           <details className="group rounded-[30px] border border-slate-200 bg-white p-6 shadow-sm">
             <summary className="flex cursor-pointer list-none flex-wrap items-start justify-between gap-4">

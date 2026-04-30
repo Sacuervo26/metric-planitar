@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useAuth } from "@/lib/auth/use-auth";
 import {
   COL_DRAFTER_NAME,
   COL_DRAFTER_TEAM,
@@ -408,9 +409,25 @@ function PrintIcon({ className = "h-4 w-4" }: { className?: string }) {
 
 export default function PersonReportPage() {
   const params = useParams<{ name: string }>();
+  const router = useRouter();
+  const { user: authUser, status: authStatus } = useAuth();
   const personName = decodeURIComponent(params?.name ?? "");
   const normalizedPersonName = useMemo(() => normalizeName(personName), [personName]);
   const snapshot = useSnapshot();
+
+  // Members can't print someone else's weekly report — that's the same data
+  // we hide from them on the profile page itself. Bounce them back if they
+  // try the URL directly.
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !authUser) return;
+    if (authUser.role === "leader") return;
+    const isOwn =
+      !!authUser.normalizedPersonName &&
+      authUser.normalizedPersonName === normalizedPersonName;
+    if (!isOwn) {
+      router.replace("/");
+    }
+  }, [authStatus, authUser, normalizedPersonName, router]);
 
   const [uploadRows, setUploadRows] = useState<CsvRow[]>([]);
   const [scheduleBatches, setScheduleBatches] = useState<ScheduleBatch[]>([]);
