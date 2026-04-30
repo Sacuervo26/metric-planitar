@@ -133,16 +133,23 @@ export async function fetchMe(): Promise<AuthUser | null> {
 }
 
 export async function changePasswordRequest(
-  currentPassword: string,
-  newPassword: string
+  newPassword: string,
+  currentPassword?: string
 ): Promise<AuthUser> {
   if (!API_BASE) {
     throw new Error("NEXT_PUBLIC_API_URL no está configurado");
   }
+  // currentPassword is only required when the user is rotating an
+  // already-permanent password; the backend skips the check on first
+  // login (mustChangePassword=true). Sending it as undefined here lets
+  // JSON.stringify drop it from the payload.
+  const body: Record<string, string> = { newPassword };
+  if (currentPassword) body.currentPassword = currentPassword;
+
   const res = await fetch(`${API_BASE}/auth/change-password`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ currentPassword, newPassword }),
+    body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {

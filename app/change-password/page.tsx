@@ -15,6 +15,11 @@ export default function ChangePasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // First login = the user just authenticated with a temp password and must
+  // pick a real one. We don't ask for the temp one again — they already
+  // proved knowledge of it by logging in, and the JWT carries that proof.
+  const isFirstLogin = Boolean(user?.mustChangePassword);
+
   useEffect(() => {
     if (status === "anonymous") {
       router.replace("/login");
@@ -32,7 +37,10 @@ export default function ChangePasswordPage() {
 
     setSubmitting(true);
     try {
-      const updated = await changePasswordRequest(currentPassword, newPassword);
+      const updated = await changePasswordRequest(
+        newPassword,
+        isFirstLogin ? undefined : currentPassword
+      );
       setUser(updated);
       router.replace("/");
     } catch (err) {
@@ -49,11 +57,14 @@ export default function ChangePasswordPage() {
       <div className="w-full max-w-sm rounded-2xl bg-white shadow-xl border border-slate-200 p-8">
         <div className="mb-6">
           <h1 className="text-xl font-bold text-slate-900">
-            Cambia tu contraseña
+            {isFirstLogin
+              ? "Establece tu contraseña"
+              : "Cambia tu contraseña"}
           </h1>
           <p className="mt-2 text-sm text-slate-500">
-            Por seguridad, en tu primer ingreso debes establecer tu propia
-            contraseña.
+            {isFirstLogin
+              ? "Es tu primer ingreso. Define una contraseña personal que solo tú sepas."
+              : "Para cambiar tu contraseña, ingresa la actual y la nueva."}
             {user ? (
               <>
                 <br />
@@ -66,13 +77,15 @@ export default function ChangePasswordPage() {
         </div>
 
         <form onSubmit={onSubmit} className="space-y-4">
-          <PasswordInput
-            label="Contraseña actual (la temporal)"
-            required
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            autoComplete="current-password"
-          />
+          {!isFirstLogin ? (
+            <PasswordInput
+              label="Contraseña actual"
+              required
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              autoComplete="current-password"
+            />
+          ) : null}
 
           <PasswordInput
             label="Nueva contraseña"
@@ -104,7 +117,11 @@ export default function ChangePasswordPage() {
             disabled={submitting}
             className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-400"
           >
-            {submitting ? "Guardando…" : "Cambiar y entrar"}
+            {submitting
+              ? "Guardando…"
+              : isFirstLogin
+                ? "Guardar y entrar"
+                : "Cambiar contraseña"}
           </button>
 
           <button

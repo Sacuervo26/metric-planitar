@@ -60,18 +60,25 @@ router.get("/me", requireAuth, async (req, res, next) => {
 router.post("/change-password", requireAuth, async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body || {};
-    if (
-      typeof currentPassword !== "string" ||
-      typeof newPassword !== "string"
-    ) {
-      return res
-        .status(400)
-        .json({ error: "currentPassword y newPassword son requeridos" });
+    if (typeof newPassword !== "string") {
+      return res.status(400).json({ error: "newPassword es requerido" });
     }
 
-    const ok = await bcrypt.compare(currentPassword, req.user.passwordHash);
-    if (!ok) {
-      return res.status(401).json({ error: "Contraseña actual incorrecta" });
+    // First-login shortcut: the user is already JWT-authenticated (they just
+    // proved knowledge of their temp password by logging in), so don't make
+    // them type it a second time. We only verify the current password when
+    // they're rotating an already-real password.
+    const isFirstLogin = Boolean(req.user.mustChangePassword);
+    if (!isFirstLogin) {
+      if (typeof currentPassword !== "string") {
+        return res
+          .status(400)
+          .json({ error: "currentPassword es requerido" });
+      }
+      const ok = await bcrypt.compare(currentPassword, req.user.passwordHash);
+      if (!ok) {
+        return res.status(401).json({ error: "Contraseña actual incorrecta" });
+      }
     }
 
     if (!isValidPassword(newPassword)) {
@@ -81,10 +88,19 @@ router.post("/change-password", requireAuth, async (req, res, next) => {
       });
     }
 
-    if (newPassword === currentPassword) {
-      return res
-        .status(400)
-        .json({ error: "La nueva contraseña debe ser distinta de la actual" });
+    // Defensive: don't let someone "rotate" to the exact same hash they
+    // already have. Cheap to check and useful both for first-login (avoids
+    // keeping the temp password as the permanent one) and for rotations.
+    const matchesExisting = await bcrypt.compare(
+      newPassword,
+      req.user.passwordHash
+    );
+    if (matchesExisting) {
+      return res.status(400).json({
+        error: isFirstLogin
+          ? "La nueva contraseña no puede ser la temporal."
+          : "La nueva contraseña debe ser distinta de la actual.",
+      });
     }
 
     const newHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
