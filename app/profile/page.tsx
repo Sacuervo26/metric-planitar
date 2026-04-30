@@ -57,13 +57,31 @@ function subscribePersonConfig(onStoreChange: () => void) {
   };
 }
 
+// useSyncExternalStore demands referential equality between snapshots, so
+// we cache the parsed object and only re-parse when the underlying raw
+// localStorage value changes. Returning a freshly parsed object on every
+// call here triggered the infinite-render loop that crashed the page.
+let cachedPersonConfigRaw: string | null = null;
+let cachedPersonConfigParsed: Record<string, PersonConfigEntry> =
+  EMPTY_PERSON_CONFIG;
+
 function readPersonConfig(): Record<string, PersonConfigEntry> {
   if (typeof window === "undefined") return EMPTY_PERSON_CONFIG;
   try {
     const raw = localStorage.getItem(PERSON_CONFIG_KEY);
-    if (!raw) return EMPTY_PERSON_CONFIG;
-    return JSON.parse(raw) as Record<string, PersonConfigEntry>;
+    if (raw === cachedPersonConfigRaw) return cachedPersonConfigParsed;
+    if (!raw) {
+      cachedPersonConfigRaw = raw;
+      cachedPersonConfigParsed = EMPTY_PERSON_CONFIG;
+      return EMPTY_PERSON_CONFIG;
+    }
+    const parsed = JSON.parse(raw) as Record<string, PersonConfigEntry>;
+    cachedPersonConfigRaw = raw;
+    cachedPersonConfigParsed = parsed;
+    return parsed;
   } catch {
+    cachedPersonConfigRaw = null;
+    cachedPersonConfigParsed = EMPTY_PERSON_CONFIG;
     return EMPTY_PERSON_CONFIG;
   }
 }
