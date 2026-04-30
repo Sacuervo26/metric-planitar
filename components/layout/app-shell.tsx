@@ -319,7 +319,10 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
     async function bootstrapCloudState() {
       try {
-        const remote = await fetchRemoteDashboardState();
+        // First fetch only metadata: batch ids + counts, no row payloads.
+        // Tens of KB instead of tens of MB — keeps the free-tier worker
+        // from OOM-ing on a heavy GET, and is enough for the diff check.
+        const remote = await fetchRemoteDashboardState({ metaOnly: true });
         if (cancelled || !remote.configured || !remote.state) return;
 
         let localSnapshotGeneratedAt = 0;
@@ -480,7 +483,21 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
 
         if (!shouldHydrate) return;
 
-        await writePersistedUploadBatches(remote.state.batches);
+        // Now we actually need the row payloads — re-fetch with full data.
+        let fullState = remote;
+        try {
+          fullState = await fetchRemoteDashboardState();
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[metric-planitar] full cloud-state fetch for hydration failed; keeping local",
+            err
+          );
+          return;
+        }
+        if (cancelled || !fullState.state) return;
+
+        await writePersistedUploadBatches(fullState.state.batches);
 
         if (remote.state.snapshot) {
           localStorage.setItem(

@@ -38,8 +38,16 @@ function buildHeaders(extra?: HeadersInit): HeadersInit {
   return headers;
 }
 
-export async function fetchRemoteDashboardState(): Promise<RemoteDashboardStateResponse> {
-  const response = await fetch(CLOUD_STATE_URL, {
+export async function fetchRemoteDashboardState(
+  options: { metaOnly?: boolean } = {}
+): Promise<RemoteDashboardStateResponse> {
+  // metaOnly=true asks the backend to skip the JOIN with upload_rows so the
+  // response is a few KB instead of tens of MB. Used by the bootstrap diff
+  // (which only needs batch ids) to avoid OOM-ing the free-tier worker.
+  const url = options.metaOnly
+    ? `${CLOUD_STATE_URL}?meta=true`
+    : CLOUD_STATE_URL;
+  const response = await fetch(url, {
     cache: "no-store",
     headers: buildHeaders(),
   });
