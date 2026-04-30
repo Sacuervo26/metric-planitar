@@ -2797,11 +2797,17 @@ export default function UploadPage() {
     const serializedSnapshot = JSON.stringify(snapshot);
     if (serializedSnapshot === lastSerializedSnapshotRef.current) return;
 
+    // Sync only the snapshot via this auto-effect — DO NOT include the
+    // batches array. Each /upload page mount would otherwise re-push every
+    // batch with the same fresh-id semantics that introduced duplicates
+    // when the recovery loop ran (we ended up with ~3x the unique batch
+    // count in the cloud). Batch syncing now lives in the AppShell
+    // recovery push, which diffs by id and only sends what's missing.
     const cloudStatePayload = {
       snapshot,
       batches: {
-        standard: standardBatches,
-        australia: australiaBatches,
+        standard: [],
+        australia: [],
         updatedAt: snapshot.generatedAt,
       },
       updatedAt: snapshot.generatedAt,
